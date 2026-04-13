@@ -15,6 +15,24 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vitePrerender",
+          "title": "Vite Pre-render",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vitePrerender": [
+        {
+          "type": "webview",
+          "id": "vitePrerender.sidebarView",
+          "name": "Rotas"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "vitePrerender.openPanel",
