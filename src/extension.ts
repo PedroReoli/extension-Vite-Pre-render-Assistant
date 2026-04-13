@@ -5,10 +5,13 @@ import { RouteManager } from './routeManager';
 import { RouteScanner } from './routeScanner';
 import { Runner } from './runner';
 import { SidebarProvider } from './webview/sidebarProvider';
+import { initI18n, t } from './i18n';
 
 let runner: Runner | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
+  initI18n();
+
   const detection = detectViteProject();
   const isVite = detection.isVite && !!detection.rootPath;
   const rootPath = detection.rootPath;
@@ -51,9 +54,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.run', () => {
       if (!runner || !routeManager || !configManager) {
-        vscode.window.showWarningMessage(
-          'Este projeto não foi detectado como um projeto Vite.'
-        );
+        vscode.window.showWarningMessage(t('error.notVite'));
         return;
       }
       const config = configManager.read() || configManager.ensureExists();

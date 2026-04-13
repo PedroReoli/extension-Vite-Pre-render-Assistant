@@ -4,11 +4,9 @@ import { RouteScanner } from '../routeScanner';
 import { Runner, BuildProgress } from '../runner';
 import { ConfigManager, BuildResults } from '../configManager';
 import { PreviewPanel } from './previewPanel';
-import { getHtml, ViewState, BuildState, RouteStatus } from './getHtml';
+import { getHtml, ViewState, BuildState } from './getHtml';
+import { t } from '../i18n';
 
-/**
- * Provider da sidebar. Gerencia estados, progresso, resultados e deploy.
- */
 export class SidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'vitePrerender.sidebarView';
 
@@ -28,8 +26,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     if (this.runner) {
       this.runner.setProgressCallback((p) => this.onBuildProgress(p));
     }
-
-    // Carregar últimos resultados se existirem
     if (this.configManager) {
       this.lastResults = this.configManager.readBuildResults();
     }
@@ -41,53 +37,39 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     _token: vscode.CancellationToken
   ): void {
     this.view = webviewView;
-
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     };
-
     this.render();
-
     webviewView.webview.onDidReceiveMessage((msg) => this.handleMessage(msg));
   }
 
-  update(): void {
-    this.render();
-  }
+  update(): void { this.render(); }
 
   private render(): void {
-    if (!this.view) {
-      return;
-    }
-
+    if (!this.view) { return; }
     const routes = this.routeManager ? this.routeManager.listRoutes() : [];
     const config = this.configManager?.read();
     const outputDir = config?.outputDir || 'prerender-build';
     const isOutdated = this.configManager?.isOutdated() || false;
 
     this.view.webview.html = getHtml(
-      this.view.webview,
-      routes,
-      this.isVite,
-      this.viewState,
-      this.buildState,
-      outputDir,
-      isOutdated,
-      this.lastResults
+      this.view.webview, routes, this.isVite, this.viewState,
+      this.buildState, outputDir, isOutdated, this.lastResults
     );
   }
 
   private handleMessage(msg: { type: string; path?: string; dir?: string }): void {
     switch (msg.type) {
       case 'scan': this.handleScan(); break;
-      case 'addRoute': this.handleAddRoute(msg.path); break;
-      case 'removeRoute': this.handleRemoveRoute(msg.path); break;
-      case 'toggleRoute': this.handleToggleRoute(msg.path); break;
+      case 'addRoute': if (msg.path && this.routeManager) { this.routeManager.addRoute(msg.path); this.render(); } break;
+      case 'removeRoute': if (msg.path && this.routeManager) { this.routeManager.removeRoute(msg.path); this.render(); } break;
+      case 'toggleRoute': if (msg.path && this.routeManager) { this.routeManager.toggleRoute(msg.path); this.render(); } break;
       case 'moveRoute': this.handleMoveRoute(msg.path, msg.dir); break;
       case 'run': this.handleRun(); break;
-      case 'cancel': this.handleCancel(); break;
-      case 'back': this.handleBack(); break;
+      case 'cancel': this.runner?.cancel(); this.viewState = 'idle'; this.buildState = undefined; this.render(); break;
+      case 'back': this.viewState = 'idle'; this.buildState = undefined; this.render(); break;
       case 'openFolder': this.handleOpenFolder(); break;
       case 'showResults': this.handleShowResults(); break;
       case 'preview': this.handlePreview(msg.path); break;
@@ -96,79 +78,37 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  // ── Handlers ──────────────────────────────────────────────────
-
-  private handleAddRoute(routePath?: string): void {
-    if (routePath && this.routeManager) {
-      this.routeManager.addRoute(routePath);
-      this.render();
-    }
-  }
-
-  private handleRemoveRoute(routePath?: string): void {
-    if (routePath && this.routeManager) {
-      this.routeManager.removeRoute(routePath);
-      this.render();
-    }
-  }
-
-  private handleToggleRoute(routePath?: string): void {
-    if (routePath && this.routeManager) {
-      this.routeManager.toggleRoute(routePath);
-      this.render();
-    }
-  }
-
   private handleMoveRoute(routePath?: string, direction?: string): void {
-    if (!routePath || !direction || !this.routeManager) {
-      return;
-    }
-
+    if (!routePath || !direction || !this.routeManager) { return; }
     const routes = this.routeManager.listRoutes();
     const idx = routes.findIndex((r) => r.path === routePath);
-    if (idx === -1) {
-      return;
-    }
-
+    if (idx === -1) { return; }
     const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (newIdx < 0 || newIdx >= routes.length) {
-      return;
-    }
-
-    // Swap
+    if (newIdx < 0 || newIdx >= routes.length) { return; }
     const temp = routes[idx];
     routes[idx] = routes[newIdx];
     routes[newIdx] = temp;
-
     this.configManager?.updateRoutes(routes);
     this.render();
   }
 
   private handleScan(): void {
-    if (!this.routeScanner || !this.routeManager) {
-      return;
-    }
+    if (!this.routeScanner || !this.routeManager) { return; }
 
-    // Verificar cache
     const cache = this.routeScanner.checkCache();
     if (cache.valid) {
       const existing = new Set(this.routeManager.listRoutes().map((r) => r.path));
       const newRoutes = cache.routes.filter((p) => !existing.has(p));
-
       if (newRoutes.length === 0) {
         vscode.window.showInformationMessage(
-          `Cache válido: nenhuma nova rota. ${cache.routes.length} rotas já conhecidas.`
+          t('scan.cacheValid', { total: cache.routes.length })
         );
         return;
       }
-
-      // Tem rotas novas no cache — adicionar
-      for (const p of newRoutes) {
-        this.routeManager.addRoute(p);
-      }
+      for (const p of newRoutes) { this.routeManager.addRoute(p); }
       this.render();
       vscode.window.showInformationMessage(
-        `Cache válido: ${newRoutes.length} nova(s) rota(s) adicionada(s).`
+        t('scan.cacheNewRoutes', { count: newRoutes.length })
       );
       return;
     }
@@ -179,7 +119,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     setTimeout(() => {
       const found = this.routeScanner!.scan();
       const existing = new Set(this.routeManager!.listRoutes().map((r) => r.path));
-
       let added = 0;
       for (const scanned of found) {
         if (!existing.has(scanned.path)) {
@@ -187,7 +126,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           added++;
         }
       }
-
       this.viewState = 'idle';
       this.render();
 
@@ -195,60 +133,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const alta = found.filter((r) => r.confidence === 'alta').length;
 
       if (added > 0) {
-        vscode.window.showInformationMessage(
-          `${added} nova(s) rota(s). ${total} total (${alta} alta confiança).`
-        );
+        vscode.window.showInformationMessage(t('scan.added', { count: added, total, alta }));
       } else if (total > 0) {
-        vscode.window.showInformationMessage(
-          `Todas as ${total} rotas já estavam na lista.`
-        );
+        vscode.window.showInformationMessage(t('scan.allExist', { total }));
       } else {
-        vscode.window.showInformationMessage('Nenhuma rota encontrada.');
+        vscode.window.showInformationMessage(t('scan.noneFound'));
       }
     }, 50);
   }
 
   private handleRun(): void {
-    if (!this.runner || !this.routeManager || !this.configManager) {
-      return;
-    }
-
+    if (!this.runner || !this.routeManager || !this.configManager) { return; }
     const enabled = this.routeManager.listEnabledRoutes();
     if (enabled.length === 0) {
-      vscode.window.showWarningMessage('Nenhuma rota habilitada.');
+      vscode.window.showWarningMessage(t('build.noRoutes'));
       return;
     }
-
     const config = this.configManager.read() || this.configManager.ensureExists();
-
     this.buildState = {
       step: 'install',
-      routeStatuses: enabled.map((r) => ({
-        path: r.path,
-        status: 'pending' as const,
-      })),
-      total: enabled.length,
-      completed: 0,
-      errors: 0,
-      finished: false,
+      routeStatuses: enabled.map((r) => ({ path: r.path, status: 'pending' as const })),
+      total: enabled.length, completed: 0, errors: 0, finished: false,
     };
     this.viewState = 'building';
     this.render();
-
     this.runner.run(enabled, config);
-  }
-
-  private handleCancel(): void {
-    this.runner?.cancel();
-    this.viewState = 'idle';
-    this.buildState = undefined;
-    this.render();
-  }
-
-  private handleBack(): void {
-    this.viewState = 'idle';
-    this.buildState = undefined;
-    this.render();
   }
 
   private handleOpenFolder(): void {
@@ -263,23 +172,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.buildState = undefined;
       this.render();
     } else {
-      vscode.window.showWarningMessage('Nenhum resultado disponível. Execute o pré-render primeiro.');
+      vscode.window.showWarningMessage(t('error.noResults'));
     }
   }
 
   private handlePreview(routePath?: string): void {
-    if (!routePath || !this.runner || !this.configManager) {
-      return;
-    }
-
+    if (!routePath || !this.runner || !this.configManager) { return; }
     const config = this.configManager.read();
     const outputDir = config?.outputDir || 'prerender-build';
     const html = this.runner.getRenderedHtml(routePath, outputDir);
-
     if (html) {
       PreviewPanel.show(routePath, html);
     } else {
-      vscode.window.showWarningMessage(`HTML não encontrado para ${routePath}.`);
+      vscode.window.showWarningMessage(t('error.htmlNotFound', { path: routePath }));
     }
   }
 
@@ -289,57 +194,34 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private handleDeployCopy(): void {
-    if (!this.runner || !this.configManager) {
-      return;
-    }
-
+    if (!this.runner || !this.configManager) { return; }
     const config = this.configManager.read();
     const outputDir = config?.outputDir || 'prerender-build';
     const dest = config?.deploy?.copyTo;
-
     if (!dest) {
       vscode.window.showInputBox({
-        prompt: 'Caminho de destino para o deploy',
-        placeHolder: '../deploy/public',
+        prompt: t('deploy.copyPrompt'),
+        placeHolder: t('deploy.copyPlaceholder'),
       }).then((value) => {
-        if (value) {
-          this.runner!.deployTo(outputDir, value);
-        }
+        if (value) { this.runner!.deployTo(outputDir, value); }
       });
     } else {
       this.runner.deployTo(outputDir, dest);
     }
   }
 
-  // ── Progresso ─────────────────────────────────────────────────
-
   private onBuildProgress(p: BuildProgress): void {
-    if (!this.buildState) {
-      return;
-    }
-
+    if (!this.buildState) { return; }
     this.buildState.step = p.step;
 
     if (p.step === 'render' && p.route) {
       const rs = this.buildState.routeStatuses.find((r) => r.path === p.route);
       if (rs) {
-        if (p.status === 'start') {
-          rs.status = 'rendering';
-        } else if (p.status === 'done') {
-          rs.status = 'done';
-          rs.result = p.result;
-          this.buildState.completed++;
-        } else if (p.status === 'error') {
-          rs.status = 'error';
-          rs.message = p.message;
-          rs.result = p.result;
-          this.buildState.completed++;
-          this.buildState.errors++;
-        }
+        if (p.status === 'start') { rs.status = 'rendering'; }
+        else if (p.status === 'done') { rs.status = 'done'; rs.result = p.result; this.buildState.completed++; }
+        else if (p.status === 'error') { rs.status = 'error'; rs.message = p.message; rs.result = p.result; this.buildState.completed++; this.buildState.errors++; }
       }
-      if (p.total) {
-        this.buildState.total = p.total;
-      }
+      if (p.total) { this.buildState.total = p.total; }
     }
 
     if (p.step === 'done') {

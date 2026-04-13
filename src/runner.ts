@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { Route, PrerenderConfig, RouteResult, BuildResults, ConfigManager } from './configManager';
+import { t, translateWarning } from './i18n';
 
 export interface BuildProgress {
   step: 'install' | 'build' | 'render' | 'done' | 'error';
@@ -41,14 +42,12 @@ export class Runner {
 
   run(enabledRoutes: Route[], config: PrerenderConfig): void {
     if (enabledRoutes.length === 0) {
-      vscode.window.showWarningMessage(
-        'Nenhuma rota habilitada. Ative pelo menos uma rota antes de executar.'
-      );
+      vscode.window.showWarningMessage(t('build.noRoutes'));
       return;
     }
 
     if (this.process && !this.process.killed) {
-      vscode.window.showWarningMessage('Um pré-render já está em execução.');
+      vscode.window.showWarningMessage(t('build.alreadyRunning'));
       return;
     }
 
@@ -95,22 +94,22 @@ export class Runner {
 
       if (code === 0) {
         this.outputChannel.appendLine('');
-        this.outputChannel.appendLine('Pré-render concluído com sucesso.');
+        this.outputChannel.appendLine(t('output.done'));
         this.saveBuildResults(config.outputDir);
         this.emit({ step: 'done', status: 'done' });
       } else {
         this.outputChannel.appendLine('');
-        this.outputChannel.appendLine(`Processo encerrado com código ${code}`);
+        this.outputChannel.appendLine(t('output.exitCode', { code: code || 0 }));
         this.emit({
           step: 'error',
           status: 'error',
-          message: `Processo encerrado com código ${code}`,
+          message: t('output.exitCode', { code: code || 0 }),
         });
       }
     });
 
     proc.on('error', (err) => {
-      this.outputChannel.appendLine(`Erro ao iniciar: ${err.message}`);
+      this.outputChannel.appendLine(t('output.startError', { message: err.message }));
       this.emit({ step: 'error', status: 'error', message: err.message });
       this.process = undefined;
     });
@@ -120,7 +119,7 @@ export class Runner {
     if (this.process && !this.process.killed) {
       this.process.kill();
       this.process = undefined;
-      this.emit({ step: 'error', status: 'error', message: 'Cancelado pelo usuário.' });
+      this.emit({ step: 'error', status: 'error', message: t('output.cancelled') });
     }
   }
 
@@ -157,35 +156,31 @@ export class Runner {
     const dest = path.resolve(this.projectRoot, destination);
 
     if (!fs.existsSync(src)) {
-      vscode.window.showErrorMessage(`Pasta ${outputDir} não encontrada. Execute o pré-render primeiro.`);
+      vscode.window.showErrorMessage(t('deploy.folderNotFound', { dir: outputDir }));
       return false;
     }
 
     try {
       this.copyDirSync(src, dest);
-      vscode.window.showInformationMessage(`Deploy copiado para: ${dest}`);
+      vscode.window.showInformationMessage(t('deploy.copySuccess', { path: dest }));
       return true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      vscode.window.showErrorMessage(`Erro no deploy: ${msg}`);
+      vscode.window.showErrorMessage(t('deploy.copyError', { error: msg }));
       return false;
     }
   }
 
-  /**
-   * Gera um arquivo .zip da pasta de output.
-   */
   generateZip(outputDir: string): boolean {
     const src = path.join(this.projectRoot, outputDir);
     const zipPath = path.join(this.projectRoot, `${outputDir}.zip`);
 
     if (!fs.existsSync(src)) {
-      vscode.window.showErrorMessage(`Pasta ${outputDir} não encontrada.`);
+      vscode.window.showErrorMessage(t('deploy.folderNotFound', { dir: outputDir }));
       return false;
     }
 
     try {
-      // Usar tar no Windows (PowerShell) ou zip no Unix
       if (process.platform === 'win32') {
         execSync(
           `powershell -Command "Compress-Archive -Path '${src}\\*' -DestinationPath '${zipPath}' -Force"`,
@@ -195,11 +190,11 @@ export class Runner {
         execSync(`cd "${src}" && zip -r "${zipPath}" .`, { cwd: this.projectRoot });
       }
 
-      vscode.window.showInformationMessage(`ZIP gerado: ${zipPath}`);
+      vscode.window.showInformationMessage(t('deploy.zipSuccess', { path: zipPath }));
       return true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      vscode.window.showErrorMessage(`Erro ao gerar ZIP: ${msg}`);
+      vscode.window.showErrorMessage(t('deploy.zipError', { error: msg }));
       return false;
     }
   }
@@ -241,34 +236,34 @@ export class Runner {
     switch (p.step) {
       case 'install':
         if (p.status === 'start') {
-          this.outputChannel.appendLine('Verificando dependências...');
+          this.outputChannel.appendLine(t('step.install'));
         } else if (p.status === 'done') {
-          this.outputChannel.appendLine('Dependências OK.');
+          this.outputChannel.appendLine(t('output.depsOk'));
         }
         break;
       case 'build':
         if (p.status === 'start') {
           this.outputChannel.appendLine('');
-          this.outputChannel.appendLine('Executando vite build...');
+          this.outputChannel.appendLine(t('output.building'));
         } else if (p.status === 'done') {
-          this.outputChannel.appendLine('Build concluído.');
+          this.outputChannel.appendLine(t('output.buildDone'));
         }
         break;
       case 'render':
         if (p.status === 'start' && p.route) {
-          this.outputChannel.appendLine(`  [${p.current}/${p.total}] ${p.route}`);
+          this.outputChannel.appendLine(`  ${t('output.rendering', { current: p.current || 0, total: p.total || 0, route: p.route })}`);
         } else if (p.status === 'done' && p.result) {
           const r = p.result;
           const sizeInfo = `${formatSize(r.originalSize)} → ${formatSize(r.renderedSize)}`;
-          const seoInfo = `SEO: ${r.seo.score}/100`;
-          this.outputChannel.appendLine(`         OK  ${sizeInfo}  ${seoInfo}`);
+          const seoInfo = t('output.seo', { score: r.seo.score });
+          this.outputChannel.appendLine(`         ${t('output.ok')}  ${sizeInfo}  ${seoInfo}`);
           if (r.seo.warnings.length > 0) {
             for (const w of r.seo.warnings) {
-              this.outputChannel.appendLine(`         ⚠ ${w}`);
+              this.outputChannel.appendLine(`         ⚠ ${translateWarning(w)}`);
             }
           }
         } else if (p.status === 'error') {
-          this.outputChannel.appendLine(`         ERRO: ${p.message}`);
+          this.outputChannel.appendLine(`         ${t('output.error', { message: p.message || '' })}`);
         }
         break;
     }
@@ -352,35 +347,35 @@ function analyzeSeo(html, route) {
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\\/title>/i);
   const hasTitle = !!titleMatch && titleMatch[1].trim().length > 0;
   const title = titleMatch ? titleMatch[1].trim() : '';
-  if (!hasTitle) { warnings.push('Sem <title>'); score -= 20; }
-  else if (title.length < 10) { warnings.push('Title muito curto (' + title.length + ' chars)'); score -= 5; }
-  else if (title.length > 70) { warnings.push('Title muito longo (' + title.length + ' chars)'); score -= 5; }
+  if (!hasTitle) { warnings.push('seo.noTitle'); score -= 20; }
+  else if (title.length < 10) { warnings.push('seo.titleShort:' + title.length); score -= 5; }
+  else if (title.length > 70) { warnings.push('seo.titleLong:' + title.length); score -= 5; }
 
   const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i)
     || html.match(/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']description["']/i);
   const hasMetaDescription = !!descMatch && descMatch[1].trim().length > 0;
   const metaDescription = descMatch ? descMatch[1].trim() : '';
-  if (!hasMetaDescription) { warnings.push('Sem meta description'); score -= 15; }
-  else if (metaDescription.length < 50) { warnings.push('Meta description curta'); score -= 5; }
-  else if (metaDescription.length > 160) { warnings.push('Meta description longa'); score -= 5; }
+  if (!hasMetaDescription) { warnings.push('seo.noDescription'); score -= 15; }
+  else if (metaDescription.length < 50) { warnings.push('seo.descShort'); score -= 5; }
+  else if (metaDescription.length > 160) { warnings.push('seo.descLong'); score -= 5; }
 
   const hasOgTitle = /<meta[^>]*property=["']og:title["']/i.test(html);
-  if (!hasOgTitle) { warnings.push('Sem og:title'); score -= 10; }
+  if (!hasOgTitle) { warnings.push('seo.noOgTitle'); score -= 10; }
 
   const hasOgDescription = /<meta[^>]*property=["']og:description["']/i.test(html);
-  if (!hasOgDescription) { warnings.push('Sem og:description'); score -= 10; }
+  if (!hasOgDescription) { warnings.push('seo.noOgDesc'); score -= 10; }
 
   const hasOgImage = /<meta[^>]*property=["']og:image["']/i.test(html);
-  if (!hasOgImage) { warnings.push('Sem og:image'); score -= 10; }
+  if (!hasOgImage) { warnings.push('seo.noOgImage'); score -= 10; }
 
   const hasCanonical = /<link[^>]*rel=["']canonical["']/i.test(html);
-  if (!hasCanonical) { warnings.push('Sem link canonical'); score -= 5; }
+  if (!hasCanonical) { warnings.push('seo.noCanonical'); score -= 5; }
 
   const hasLang = /<html[^>]*lang=["'][^"']+["']/i.test(html);
-  if (!hasLang) { warnings.push('Sem atributo lang no <html>'); score -= 5; }
+  if (!hasLang) { warnings.push('seo.noLang'); score -= 5; }
 
   const hasViewport = /<meta[^>]*name=["']viewport["']/i.test(html);
-  if (!hasViewport) { warnings.push('Sem meta viewport'); score -= 5; }
+  if (!hasViewport) { warnings.push('seo.noViewport'); score -= 5; }
 
   return {
     hasTitle, title,
@@ -392,16 +387,29 @@ function analyzeSeo(html, route) {
 }
 
 async function main() {
-  // 1. Dependências
+  // 1. Dependências do projeto
   progress({ step: 'install', status: 'start' });
 
+  const nodeModulesExists = fs.existsSync(path.join(PROJECT_ROOT, 'node_modules'));
+  if (!nodeModulesExists) {
+    console.log('node_modules nao encontrado. Executando npm install...');
+    try {
+      execSync('npm install', { cwd: PROJECT_ROOT, stdio: 'inherit' });
+    } catch (err) {
+      progress({ step: 'error', status: 'error', message: 'npm install falhou: ' + err.message });
+      process.exit(1);
+    }
+  }
+
+  // 2. Puppeteer
   let puppeteer;
   try {
     puppeteer = await import('puppeteer');
   } catch {
-    console.log('Instalando puppeteer...');
+    console.log('Puppeteer nao encontrado. Instalando (pode demorar na primeira vez)...');
     try {
-      execSync('npm install --save-dev puppeteer', { cwd: PROJECT_ROOT, stdio: 'pipe' });
+      // stdio: 'inherit' para mostrar progresso do download do Chromium
+      execSync('npm install --save-dev puppeteer', { cwd: PROJECT_ROOT, stdio: 'inherit' });
       puppeteer = await import('puppeteer');
     } catch (err) {
       progress({ step: 'error', status: 'error', message: 'Falha ao instalar puppeteer: ' + err.message });
@@ -411,7 +419,7 @@ async function main() {
 
   progress({ step: 'install', status: 'done' });
 
-  // 2. Build
+  // 3. Build
   progress({ step: 'build', status: 'start' });
 
   if (CLEAN && fs.existsSync(OUTPUT_DIR)) {
@@ -420,10 +428,10 @@ async function main() {
 
   try {
     execSync('npx vite build --outDir ' + path.relative(PROJECT_ROOT, OUTPUT_DIR), {
-      cwd: PROJECT_ROOT, stdio: 'pipe',
+      cwd: PROJECT_ROOT, stdio: 'inherit',
     });
   } catch (err) {
-    progress({ step: 'error', status: 'error', message: 'Build falhou: ' + err.stderr?.toString() || err.message });
+    progress({ step: 'error', status: 'error', message: 'Build falhou. Verifique o output acima.' });
     process.exit(1);
   }
 

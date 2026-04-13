@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { Route, RouteResult, BuildResults } from '../configManager';
 import { BuildProgress } from '../runner';
+import { t, translateWarning } from '../i18n';
 
 export type ViewState = 'idle' | 'scanning' | 'building' | 'results';
 
@@ -34,6 +35,7 @@ export function getHtml(
   const n = getNonce();
   const enabled = routes.filter((r) => r.enabled).length;
   const od = outputDir || 'prerender-build';
+  const plural = (count: number) => count !== 1 ? 's' : '';
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -42,21 +44,21 @@ export function getHtml(
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; style-src 'nonce-${n}'; script-src 'nonce-${n}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pre-render</title>
+  <title>${t('header.title')}</title>
   <style nonce="${n}">${CSS}</style>
 </head>
 <body>
   <div class="header">
     <svg viewBox="0 0 24 24" class="hicon"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-    <h2>Pre-render</h2>
+    <h2>${t('header.title')}</h2>
   </div>
   <div class="status ${isVite ? 'ok' : 'warn'}">
     <span class="dot"></span>
-    ${isVite ? 'Projeto Vite detectado' : 'Nenhum projeto Vite'}
+    ${isVite ? t('status.viteDetected') : t('status.viteNotDetected')}
   </div>
-  ${!isVite ? '<div class="empty">Abra um projeto com Vite.</div>' : ''}
+  ${!isVite ? `<div class="empty">${t('status.openViteProject')}</div>` : ''}
   ${isVite && viewState === 'idle' ? idleView(routes, enabled, isOutdated || false, lastResults) : ''}
-  ${isVite && viewState === 'scanning' ? scanningView(routes, enabled) : ''}
+  ${isVite && viewState === 'scanning' ? scanningView() : ''}
   ${isVite && viewState === 'building' && buildState ? buildView(buildState) : ''}
   ${isVite && viewState === 'results' && lastResults ? resultsView(lastResults, od) : ''}
   <script nonce="${n}">${JS}</script>
@@ -64,79 +66,80 @@ export function getHtml(
 </html>`;
 }
 
-// ── Views ─────────────────────────────────────────────────────
-
 function idleView(routes: Route[], enabled: number, outdated: boolean, lastResults?: BuildResults | null): string {
-  const items = routes.map((r, i) => `
+  const total = routes.length;
+  const s = total !== 1 ? 's' : '';
+
+  const items = routes.map((r) => `
     <div class="ri">
       <label class="rl">
         <input type="checkbox" class="rc" data-path="${e(r.path)}" ${r.enabled ? 'checked' : ''}/>
         <span class="rp">${e(r.path)}</span>
       </label>
-      <span class="badge ${r.enabled ? 'b-yes' : 'b-no'}">${r.enabled ? 'Sim' : 'Não'}</span>
-      <button class="mv" data-path="${e(r.path)}" data-dir="up" title="Mover acima">&#9650;</button>
-      <button class="mv" data-path="${e(r.path)}" data-dir="down" title="Mover abaixo">&#9660;</button>
-      <button class="rm" data-path="${e(r.path)}" title="Remover">x</button>
+      <span class="badge ${r.enabled ? 'b-yes' : 'b-no'}">${r.enabled ? t('routes.yes') : t('routes.no')}</span>
+      <button class="mv" data-path="${e(r.path)}" data-dir="up" title="${t('routes.moveUp')}">&#9650;</button>
+      <button class="mv" data-path="${e(r.path)}" data-dir="down" title="${t('routes.moveDown')}">&#9660;</button>
+      <button class="rm" data-path="${e(r.path)}" title="${t('routes.remove')}">x</button>
     </div>`).join('');
 
   const outdatedBanner = outdated ? `
-    <div class="alert alert-warn">
-      Código-fonte alterado desde o último pré-render. Execute novamente.
-    </div>` : '';
+    <div class="alert alert-warn">${t('outdated.warning')}</div>` : '';
 
   const lastBuildInfo = lastResults ? `
     <div class="last-build">
-      Último build: ${new Date(lastResults.timestamp).toLocaleString('pt-BR')}
-      — ${fmtSize(lastResults.totalOriginalSize)} &rarr; ${fmtSize(lastResults.totalRenderedSize)}
-      <a class="link" id="showResults">Ver resultados</a>
+      ${t('lastBuild.info', {
+        date: new Date(lastResults.timestamp).toLocaleString(),
+        original: fmtSize(lastResults.totalOriginalSize),
+        rendered: fmtSize(lastResults.totalRenderedSize),
+      })}
+      <a class="link" id="showResults">${t('lastBuild.viewResults')}</a>
     </div>` : '';
 
   return `
   ${outdatedBanner}
   ${lastBuildInfo}
-
   <div class="section">
-    <div class="lbl">Descoberta</div>
-    <button class="btn btn-sec" id="scanBtn">Escanear Rotas</button>
+    <div class="lbl">${t('scan.title')}</div>
+    <button class="btn btn-sec" id="scanBtn">${t('scan.button')}</button>
   </div>
   <div class="div"></div>
   <div class="section">
-    <div class="lbl">Rotas</div>
-    ${routes.length > 0
-      ? `<div class="ctr"><strong>${enabled}</strong> de ${routes.length} selecionada${routes.length !== 1 ? 's' : ''}</div>
+    <div class="lbl">${t('routes.title')}</div>
+    ${total > 0
+      ? `<div class="ctr"><strong>${enabled}</strong> ${t('routes.selected', { enabled, total, s })}</div>
          <div class="rlist">${items}</div>`
-      : '<div class="empty">Nenhuma rota. Escaneie ou adicione.</div>'}
+      : `<div class="empty">${t('routes.empty')}</div>`}
     <div class="addrow">
-      <input class="inp" id="routeInput" type="text" placeholder="/nova-rota"/>
+      <input class="inp" id="routeInput" type="text" placeholder="${t('routes.placeholder')}"/>
       <button class="btn btn-pri btn-sm" id="addBtn">+</button>
     </div>
   </div>
   <div class="div"></div>
   <button class="btn btn-pri" id="runBtn" ${enabled === 0 ? 'disabled' : ''}>
-    Gerar Pre-render (${enabled} rota${enabled !== 1 ? 's' : ''})
+    ${t('build.button', { count: enabled, s: enabled !== 1 ? 's' : '' })}
   </button>
   <div class="deploy-row">
-    <button class="btn btn-sec btn-sm" id="deployZip">Gerar ZIP</button>
-    <button class="btn btn-sec btn-sm" id="deployCopy">Copiar deploy</button>
+    <button class="btn btn-sec btn-sm" id="deployZip">${t('deploy.zip')}</button>
+    <button class="btn btn-sec btn-sm" id="deployCopy">${t('deploy.copy')}</button>
   </div>`;
 }
 
-function scanningView(routes: Route[], enabled: number): string {
+function scanningView(): string {
   return `
   <div class="section" style="text-align:center;padding:30px 0">
     <div class="spinner lg"></div>
-    <div style="margin-top:10px;color:var(--vscode-descriptionForeground)">Escaneando projeto...</div>
+    <div style="margin-top:10px;color:var(--vscode-descriptionForeground)">${t('scan.scanning')}</div>
   </div>`;
 }
 
 function buildView(state: BuildState): string {
   const pct = state.total > 0 ? Math.round((state.completed / state.total) * 100) : 0;
   const steps: Record<string, string> = {
-    install: 'Verificando dependências...',
-    build: 'Executando vite build...',
-    render: `Renderizando (${state.completed}/${state.total})`,
-    done: 'Concluído',
-    error: 'Erro',
+    install: t('step.install'),
+    build: t('step.build'),
+    render: t('step.render', { current: state.completed, total: state.total }),
+    done: t('step.done'),
+    error: t('step.error'),
   };
 
   const routeList = state.routeStatuses.map((r) => {
@@ -157,16 +160,16 @@ function buildView(state: BuildState): string {
   let footer = '';
   if (state.finished) {
     footer = `<div style="margin-top:8px;display:flex;gap:6px">
-      <button class="btn btn-sec" id="backBtn" style="flex:1">Voltar</button>
-      <button class="btn btn-pri" id="showResults" style="flex:1">Ver resultados</button>
+      <button class="btn btn-sec" id="backBtn" style="flex:1">${t('build.back')}</button>
+      <button class="btn btn-pri" id="showResults" style="flex:1">${t('build.viewResults')}</button>
     </div>`;
   } else {
-    footer = `<button class="btn btn-dan" id="cancelBtn" style="margin-top:8px">Cancelar</button>`;
+    footer = `<button class="btn btn-dan" id="cancelBtn" style="margin-top:8px">${t('build.cancel')}</button>`;
   }
 
   return `
   <div class="section">
-    <div class="lbl">Progresso</div>
+    <div class="lbl">${t('build.progress')}</div>
     <div class="step">${!state.finished ? '<span class="spinner"></span>' : ''} <strong>${steps[state.step] || state.step}</strong></div>
     ${state.errorMessage && !state.routeStatuses.length ? `<div class="alert alert-err">${e(state.errorMessage)}</div>` : ''}
     <div class="pbar"><div class="pfill" style="width:${state.finished && !state.errors ? 100 : pct}%"></div></div>
@@ -181,7 +184,7 @@ function resultsView(results: BuildResults, outputDir: string): string {
 
   const routeCards = results.routes.map((r) => {
     const seo = r.seo;
-    const warnings = seo.warnings.map((w) => `<div class="warn-item">⚠ ${e(w)}</div>`).join('');
+    const warnings = seo.warnings.map((w) => `<div class="warn-item">⚠ ${e(translateWarning(w))}</div>`).join('');
 
     return `
     <div class="result-card">
@@ -189,7 +192,7 @@ function resultsView(results: BuildResults, outputDir: string): string {
         <span class="rp">${e(r.path)}</span>
         <span class="seo-score seo-${seoGrade(seo.score)}">${seo.score}/100</span>
         <span class="size-tag">${fmtSize(r.originalSize)} → ${fmtSize(r.renderedSize)}</span>
-        <button class="btn btn-sec btn-sm preview-btn" data-path="${e(r.path)}">Preview</button>
+        <button class="btn btn-sec btn-sm preview-btn" data-path="${e(r.path)}">${t('results.preview')}</button>
       </div>
       <div class="rc-tags">
         ${tag('title', seo.hasTitle)}${tag('description', seo.hasMetaDescription)}
@@ -201,28 +204,33 @@ function resultsView(results: BuildResults, outputDir: string): string {
     </div>`;
   }).join('');
 
+  const diff = results.totalRenderedSize - results.totalOriginalSize;
+
   return `
   <div class="section">
-    <div class="lbl">Resultados</div>
+    <div class="lbl">${t('results.title')}</div>
     <div class="result-summary">
       <div class="rs-item">
-        <div class="rs-val">${results.routes.length}</div><div class="rs-label">Rotas</div>
+        <div class="rs-val">${results.routes.length}</div><div class="rs-label">${t('results.routes')}</div>
       </div>
       <div class="rs-item">
-        <div class="rs-val seo-${seoGrade(avgScore)}">${avgScore}</div><div class="rs-label">SEO médio</div>
+        <div class="rs-val seo-${seoGrade(avgScore)}">${avgScore}</div><div class="rs-label">${t('results.avgSeo')}</div>
       </div>
       <div class="rs-item">
-        <div class="rs-val">${fmtSize(results.totalRenderedSize)}</div><div class="rs-label">Total</div>
+        <div class="rs-val">${fmtSize(results.totalRenderedSize)}</div><div class="rs-label">${t('results.totalSize')}</div>
       </div>
     </div>
     <div class="size-comparison">
-      SPA original: ${fmtSize(results.totalOriginalSize)} → Pré-renderizado: ${fmtSize(results.totalRenderedSize)}
-      <strong>(+${fmtSize(results.totalRenderedSize - results.totalOriginalSize)} de conteúdo)</strong>
+      ${t('results.sizeComparison', {
+        original: fmtSize(results.totalOriginalSize),
+        rendered: fmtSize(results.totalRenderedSize),
+      })}
+      <strong>${t('results.sizeGain', { diff: fmtSize(diff) })}</strong>
     </div>
     ${routeCards}
     <div style="margin-top:8px;display:flex;gap:6px">
-      <button class="btn btn-sec" id="openFolder" style="flex:1">Abrir pasta</button>
-      <button class="btn btn-pri" id="backBtn" style="flex:1">Voltar</button>
+      <button class="btn btn-sec" id="openFolder" style="flex:1">${t('results.openFolder')}</button>
+      <button class="btn btn-pri" id="backBtn" style="flex:1">${t('build.back')}</button>
     </div>
   </div>`;
 }
@@ -252,8 +260,8 @@ function getNonce(): string {
   return r;
 }
 
-function e(t: string): string {
-  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function e(txt: string): string {
+  return txt.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ── CSS ─────────────────────────────────────────────────────
@@ -332,17 +340,12 @@ body{font-family:var(--vscode-font-family);font-size:12px;color:var(--vscode-for
 .warn-item{padding:1px 0}
 `;
 
-// ── JS ──────────────────────────────────────────────────────
-
 const JS = `
 const vscode = acquireVsCodeApi();
 function $(id){return document.getElementById(id)}
-
 document.addEventListener('click', e => {
-  const t = e.target;
-  if(!t) return;
+  const t = e.target; if(!t) return;
   const id = t.id, d = t.dataset;
-
   if(id==='scanBtn') vscode.postMessage({type:'scan'});
   if(id==='runBtn') vscode.postMessage({type:'run'});
   if(id==='cancelBtn') vscode.postMessage({type:'cancel'});
@@ -351,20 +354,15 @@ document.addEventListener('click', e => {
   if(id==='showResults') vscode.postMessage({type:'showResults'});
   if(id==='deployZip') vscode.postMessage({type:'deployZip'});
   if(id==='deployCopy') vscode.postMessage({type:'deployCopy'});
-  if(id==='addBtn'){
-    const i=$('routeInput');
-    if(i&&i.value.trim()){vscode.postMessage({type:'addRoute',path:i.value.trim()});i.value='';}
-  }
+  if(id==='addBtn'){const i=$('routeInput');if(i&&i.value.trim()){vscode.postMessage({type:'addRoute',path:i.value.trim()});i.value='';}}
   if(t.classList.contains('rm')&&d.path){e.stopPropagation();vscode.postMessage({type:'removeRoute',path:d.path});}
   if(t.classList.contains('mv')&&d.path&&d.dir){e.stopPropagation();vscode.postMessage({type:'moveRoute',path:d.path,dir:d.dir});}
   if(t.classList.contains('preview-btn')&&d.path){vscode.postMessage({type:'preview',path:d.path});}
 });
-
 document.addEventListener('change', e => {
   const t = e.target;
   if(t&&t.classList.contains('rc')) vscode.postMessage({type:'toggleRoute',path:t.dataset.path});
 });
-
 const ri=$('routeInput');
 if(ri) ri.addEventListener('keydown', e=>{if(e.key==='Enter') $('addBtn')?.click();});
 `;
