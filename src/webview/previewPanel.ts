@@ -54,20 +54,24 @@ export class PreviewPanel {
   }
 
   /**
-   * Injeta CSS inline no HTML para que o iframe renderize corretamente.
-   * Lê os arquivos CSS referenciados e os insere como <style> tags.
+   * Injeta CSS e JS inline no HTML para que o iframe renderize completo.
+   * Lê os arquivos do build output e insere inline.
    */
   private inlineAssets(html: string, projectRoot?: string): string {
     if (!projectRoot) {
       return html;
     }
 
-    // Encontrar links de CSS e substituir por <style> inline
-    return html.replace(
+    const config = this.tryReadConfig(projectRoot);
+    const outputDir = config?.outputDir || 'prerender-build';
+    const buildDir = path.join(projectRoot, outputDir);
+
+    // Inline CSS: <link href="/assets/x.css"> → <style>...</style>
+    html = html.replace(
       /<link\s+[^>]*href=["']([^"']*\.css)["'][^>]*>/gi,
       (_match, href: string) => {
-        const cssPath = this.resolveAssetPath(href, projectRoot);
-        if (cssPath && fs.existsSync(cssPath)) {
+        const cssPath = this.resolveAsset(href, buildDir);
+        if (cssPath) {
           try {
             const css = fs.readFileSync(cssPath, 'utf-8');
             return `<style>${css}</style>`;
@@ -78,24 +82,69 @@ export class PreviewPanel {
         return _match;
       }
     );
+
+    // Inline JS: <script src="/assets/x.js"> → <script>...</script>
+    html = html.replace(
+      /<script\s+[^>]*src=["']([^"']*\.js)["'][^>]*><\/script>/gi,
+      (_match, src: string) => {
+        const jsPath = this.resolveAsset(src, buildDir);
+        if (jsPath) {
+          try {
+            const js = fs.readFileSync(jsPath, 'utf-8');
+            return `<script>${js}</script>`;
+          } catch {
+            return _match;
+          }
+        }
+        return _match;
+      }
+    );
+
+    // Inline imagens pequenas como data URI (favicons, logos)
+    html = html.replace(
+      /<img\s+[^>]*src=["']([^"']*\.(png|jpg|jpeg|svg|webp|gif))["']/gi,
+      (_match, src: string, ext: string) => {
+        const imgPath = this.resolveAsset(src, buildDir);
+        if (imgPath) {
+          try {
+            const stat = fs.statSync(imgPath);
+            // Só inline se < 100KB
+            if (stat.size < 100 * 1024) {
+              const mime: Record<string, string> = {
+                png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+                svg: 'image/svg+xml', webp: 'image/webp', gif: 'image/gif',
+              };
+              const data = fs.readFileSync(imgPath);
+              const b64 = data.toString('base64');
+              const dataUri = `data:${mime[ext] || 'application/octet-stream'};base64,${b64}`;
+              return _match.replace(src, dataUri);
+            }
+          } catch { /* ignorar */ }
+        }
+        return _match;
+      }
+    );
+
+    return html;
   }
 
-  private resolveAssetPath(href: string, projectRoot: string): string | null {
-    // Remover query strings e hashes
-    const clean = href.split('?')[0].split('#')[0];
+  /**
+   * Resolve um caminho de asset relativo ao diretório de build.
+   * Trata corretamente paths com / inicial no Windows.
+   */
+  private resolveAsset(href: string, buildDir: string): string | null {
+    // Limpar query string e hash
+    let clean = href.split('?')[0].split('#')[0];
 
-    // Assets relativos ao output dir
-    const config = this.tryReadConfig(projectRoot);
-    const outputDir = config?.outputDir || 'prerender-build';
-    const fromOutput = path.join(projectRoot, outputDir, clean);
-    if (fs.existsSync(fromOutput)) {
-      return fromOutput;
+    // Remover / inicial para evitar path.join tratar como absoluto no Windows
+    if (clean.startsWith('/')) {
+      clean = clean.slice(1);
     }
 
-    // Assets relativos à raiz
-    const fromRoot = path.join(projectRoot, clean);
-    if (fs.existsSync(fromRoot)) {
-      return fromRoot;
+    // Tentar no diretório de build
+    const fromBuild = path.join(buildDir, clean);
+    if (fs.existsSync(fromBuild)) {
+      return fromBuild;
     }
 
     return null;
