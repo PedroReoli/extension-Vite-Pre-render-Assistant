@@ -52,7 +52,10 @@ export interface SeoResult {
 }
 
 const CONFIG_FILENAME = 'prerender.config.json';
-const CACHE_FILENAME = '.prerender-cache.json';
+const INTERNAL_DIR = '.viteprerender';
+const CACHE_FILENAME = 'cache.json';
+const RESULTS_FILENAME = 'results.json';
+const SCRIPT_FILENAME = 'prerender.script.mjs';
 
 const DEFAULT_CONFIG: PrerenderConfig = {
   routes: [{ path: '/', enabled: true }],
@@ -69,11 +72,26 @@ const DEFAULT_CONFIG: PrerenderConfig = {
 
 export class ConfigManager {
   private configPath: string;
-  private cachePath: string;
+  private internalDir: string;
 
   constructor(private projectRoot: string) {
     this.configPath = path.join(projectRoot, CONFIG_FILENAME);
-    this.cachePath = path.join(projectRoot, CACHE_FILENAME);
+    this.internalDir = path.join(projectRoot, INTERNAL_DIR);
+  }
+
+  /** Garante que a pasta .viteprerender/ existe */
+  private ensureInternalDir(): void {
+    if (!fs.existsSync(this.internalDir)) {
+      fs.mkdirSync(this.internalDir, { recursive: true });
+    }
+  }
+
+  getInternalDir(): string {
+    return this.internalDir;
+  }
+
+  getScriptPath(): string {
+    return path.join(this.internalDir, SCRIPT_FILENAME);
   }
 
   getProjectRoot(): string {
@@ -143,10 +161,11 @@ export class ConfigManager {
 
   readCache(): ScanCache | null {
     try {
-      if (!fs.existsSync(this.cachePath)) {
+      const cachePath = path.join(this.internalDir, CACHE_FILENAME);
+      if (!fs.existsSync(cachePath)) {
         return null;
       }
-      const raw = fs.readFileSync(this.cachePath, 'utf-8');
+      const raw = fs.readFileSync(cachePath, 'utf-8');
       return JSON.parse(raw);
     } catch {
       return null;
@@ -154,14 +173,16 @@ export class ConfigManager {
   }
 
   writeCache(cache: ScanCache): void {
-    fs.writeFileSync(this.cachePath, JSON.stringify(cache, null, 2), 'utf-8');
+    this.ensureInternalDir();
+    const cachePath = path.join(this.internalDir, CACHE_FILENAME);
+    fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2), 'utf-8');
   }
 
   // ── Build Results ─────────────────────────────────────────────
 
   readBuildResults(): BuildResults | null {
     try {
-      const resultsPath = path.join(this.projectRoot, '.prerender-results.json');
+      const resultsPath = path.join(this.internalDir, RESULTS_FILENAME);
       if (!fs.existsSync(resultsPath)) {
         return null;
       }
@@ -173,7 +194,8 @@ export class ConfigManager {
   }
 
   writeBuildResults(results: BuildResults): void {
-    const resultsPath = path.join(this.projectRoot, '.prerender-results.json');
+    this.ensureInternalDir();
+    const resultsPath = path.join(this.internalDir, RESULTS_FILENAME);
     fs.writeFileSync(resultsPath, JSON.stringify(results, null, 2), 'utf-8');
   }
 

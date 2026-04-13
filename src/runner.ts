@@ -64,7 +64,8 @@ export class Runner {
 
     this.emit({ step: 'install', status: 'start' });
 
-    const proc = spawn('node', ['prerender.script.mjs'], {
+    const scriptPath = this.configManager.getScriptPath();
+    const proc = spawn('node', [scriptPath], {
       cwd: this.projectRoot,
       shell: true,
       env: { ...process.env, FORCE_COLOR: '0' },
@@ -334,8 +335,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ROUTES = ${routeConfigs};
-const OUTPUT_DIR = path.resolve(__dirname, '${outputDir}');
+const OUTPUT_DIR = path.resolve(PROJECT_ROOT, '${outputDir}');
 const MINIFY = ${minify};
 const CLEAN = ${cleanBefore};
 
@@ -399,7 +401,7 @@ async function main() {
   } catch {
     console.log('Instalando puppeteer...');
     try {
-      execSync('npm install --save-dev puppeteer', { cwd: __dirname, stdio: 'pipe' });
+      execSync('npm install --save-dev puppeteer', { cwd: PROJECT_ROOT, stdio: 'pipe' });
       puppeteer = await import('puppeteer');
     } catch (err) {
       progress({ step: 'error', status: 'error', message: 'Falha ao instalar puppeteer: ' + err.message });
@@ -417,8 +419,8 @@ async function main() {
   }
 
   try {
-    execSync('npx vite build --outDir ' + path.relative(__dirname, OUTPUT_DIR), {
-      cwd: __dirname, stdio: 'pipe',
+    execSync('npx vite build --outDir ' + path.relative(PROJECT_ROOT, OUTPUT_DIR), {
+      cwd: PROJECT_ROOT, stdio: 'pipe',
     });
   } catch (err) {
     progress({ step: 'error', status: 'error', message: 'Build falhou: ' + err.stderr?.toString() || err.message });
@@ -555,7 +557,12 @@ main().catch((err) => {
 });
 `.trimStart();
 
-    fs.writeFileSync(path.join(this.projectRoot, 'prerender.script.mjs'), script, 'utf-8');
+    const scriptPath = this.configManager.getScriptPath();
+    const scriptDir = path.dirname(scriptPath);
+    if (!fs.existsSync(scriptDir)) {
+      fs.mkdirSync(scriptDir, { recursive: true });
+    }
+    fs.writeFileSync(scriptPath, script, 'utf-8');
   }
 }
 
