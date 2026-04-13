@@ -5,9 +5,12 @@ import { t } from '../i18n';
 
 /**
  * Painel de preview com 3 abas:
- * - Rendered: página renderizada com CSS (iframe)
+ * - Rendered: página real com CSS/JS/imagens via webview URIs
  * - Source: código HTML formatado
- * - Raw: texto puro extraído da página
+ * - Raw: texto puro extraído
+ *
+ * A aba Rendered funciona reescrevendo os paths dos assets
+ * para URIs do webview, que o VSCode serve diretamente do disco.
  */
 export class PreviewPanel {
   private static panels = new Map<string, PreviewPanel>();
@@ -19,107 +22,162 @@ export class PreviewPanel {
     panel: vscode.WebviewPanel,
     routePath: string,
     html: string,
-    projectRoot?: string
+    buildDir: string
   ) {
     this.panel = panel;
     this.routePath = routePath;
 
-    this.panel.webview.html = this.buildHtml(html, projectRoot);
+    this.update(html, buildDir);
 
     this.panel.onDidDispose(() => {
       PreviewPanel.panels.delete(routePath);
     });
+
+    this.panel.webview.onDidReceiveMessage((msg) => {
+      if (msg.type === 'switchTab') {
+        this.panel.webview.postMessage({ type: 'showTab', tab: msg.tab });
+      }
+    });
   }
 
   static show(routePath: string, html: string, projectRoot?: string): void {
+    const buildDir = PreviewPanel.resolveBuildDir(projectRoot || '');
+
     const existing = PreviewPanel.panels.get(routePath);
     if (existing) {
       existing.panel.reveal();
-      existing.panel.webview.html = existing.buildHtml(html, projectRoot);
+      existing.update(html, buildDir);
       return;
     }
 
     const panel = vscode.window.createWebviewPanel(
       'vitePrerenderPreview',
-      `${t('preview.title', { path: routePath })}`,
+      t('preview.title', { path: routePath }),
       vscode.ViewColumn.One,
       {
         enableScripts: true,
-        retainContextWhenHidden: false,
+        retainContextWhenHidden: true,
+        localResourceRoots: buildDir
+          ? [vscode.Uri.file(buildDir)]
+          : undefined,
       }
     );
 
-    const instance = new PreviewPanel(panel, routePath, html, projectRoot);
+    const instance = new PreviewPanel(panel, routePath, html, buildDir);
     PreviewPanel.panels.set(routePath, instance);
   }
 
+  private update(html: string, buildDir: string): void {
+    const webview = this.panel.webview;
+    const nonce = getNonce();
+    const sizeKb = (Buffer.byteLength(html, 'utf-8') / 1024).toFixed(1);
+
+    // Reescrever paths de assets para webview URIs
+    const renderedHtml = this.rewriteAssetPaths(html, buildDir, webview);
+
+    // Código-fonte original (escaped para exibição)
+    const sourceEscaped = escHtml(html);
+
+    // Texto puro extraído
+    const rawText = escHtml(this.extractText(html));
+
+    webview.html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 style-src ${webview.cspSource} 'unsafe-inline';
+                 script-src 'nonce-${nonce}';
+                 img-src ${webview.cspSource} data: https:;
+                 font-src ${webview.cspSource} data:;">
+  <title>${t('preview.title', { path: this.routePath })}</title>
+  <style nonce="${nonce}">
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:var(--vscode-editor-background);color:var(--vscode-foreground);font-family:var(--vscode-font-family)}
+    .pv-toolbar{display:flex;align-items:center;gap:10px;padding:6px 12px;background:var(--vscode-sideBar-background,var(--vscode-editor-background));border-bottom:1px solid var(--vscode-widget-border);position:fixed;top:0;left:0;right:0;z-index:99999;font-size:12px}
+    .pv-toolbar strong{font-size:13px}
+    .pv-toolbar .pv-info{color:var(--vscode-descriptionForeground);font-size:11px}
+    .pv-tabs{display:flex;gap:3px;margin-left:auto}
+    .pv-tab{padding:4px 12px;border:none;border-radius:3px;cursor:pointer;font-size:11px;font-weight:600;background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
+    .pv-tab:hover{background:var(--vscode-button-secondaryHoverBackground)}
+    .pv-tab.active{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
+    .pv-view{display:none;padding-top:38px;min-height:100vh}
+    .pv-view.active{display:block}
+    #pv-rendered{background:#fff;color:#000}
+    #pv-source{padding:12px;padding-top:50px}
+    #pv-source pre{font-family:var(--vscode-editor-font-family);font-size:var(--vscode-editor-font-size,13px);white-space:pre-wrap;word-break:break-all;line-height:1.5;tab-size:2}
+    #pv-raw{padding:16px;padding-top:50px;font-size:13px;line-height:1.6;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <div class="pv-toolbar">
+    <strong>${escAttr(this.routePath)}</strong>
+    <span class="pv-info">${sizeKb} KB</span>
+    <div class="pv-tabs">
+      <button class="pv-tab active" data-tab="pv-rendered">${t('preview.rendered')}</button>
+      <button class="pv-tab" data-tab="pv-source">${t('preview.source')}</button>
+      <button class="pv-tab" data-tab="pv-raw">${t('preview.raw')}</button>
+    </div>
+  </div>
+
+  <div class="pv-view active" id="pv-rendered">
+    ${renderedHtml}
+  </div>
+
+  <div class="pv-view" id="pv-source">
+    <pre>${sourceEscaped}</pre>
+  </div>
+
+  <div class="pv-view" id="pv-raw">
+    ${rawText}
+  </div>
+
+  <script nonce="${nonce}">
+    document.querySelectorAll('.pv-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.pv-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.pv-view').forEach(v => v.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.tab).classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>`;
+  }
+
   /**
-   * Injeta CSS e JS inline no HTML para que o iframe renderize completo.
-   * Lê os arquivos do build output e insere inline.
+   * Reescreve todos os paths de assets no HTML para webview URIs.
+   * Isso permite que o webview carregue CSS, JS, imagens e fontes diretamente do disco.
    */
-  private inlineAssets(html: string, projectRoot?: string): string {
-    if (!projectRoot) {
-      return html;
-    }
+  private rewriteAssetPaths(
+    html: string,
+    buildDir: string,
+    webview: vscode.Webview
+  ): string {
+    if (!buildDir) { return html; }
 
-    const config = this.tryReadConfig(projectRoot);
-    const outputDir = config?.outputDir || 'prerender-build';
-    const buildDir = path.join(projectRoot, outputDir);
-
-    // Inline CSS: <link href="/assets/x.css"> → <style>...</style>
+    // Padrão genérico: qualquer href="..." ou src="..." que comece com /
+    // Reescreve para URI do webview
     html = html.replace(
-      /<link\s+[^>]*href=["']([^"']*\.css)["'][^>]*>/gi,
-      (_match, href: string) => {
-        const cssPath = this.resolveAsset(href, buildDir);
-        if (cssPath) {
-          try {
-            const css = fs.readFileSync(cssPath, 'utf-8');
-            return `<style>${css}</style>`;
-          } catch {
-            return _match;
-          }
+      /((?:href|src|content)\s*=\s*["'])(\/[^"']+)(["'])/gi,
+      (_match, prefix: string, assetPath: string, suffix: string) => {
+        const resolved = this.resolveToWebviewUri(assetPath, buildDir, webview);
+        if (resolved) {
+          return prefix + resolved + suffix;
         }
         return _match;
       }
     );
 
-    // Inline JS: <script src="/assets/x.js"> → <script>...</script>
+    // CSS url() dentro de <style> tags ou atributos style
     html = html.replace(
-      /<script\s+[^>]*src=["']([^"']*\.js)["'][^>]*><\/script>/gi,
-      (_match, src: string) => {
-        const jsPath = this.resolveAsset(src, buildDir);
-        if (jsPath) {
-          try {
-            const js = fs.readFileSync(jsPath, 'utf-8');
-            return `<script>${js}</script>`;
-          } catch {
-            return _match;
-          }
-        }
-        return _match;
-      }
-    );
-
-    // Inline imagens pequenas como data URI (favicons, logos)
-    html = html.replace(
-      /<img\s+[^>]*src=["']([^"']*\.(png|jpg|jpeg|svg|webp|gif))["']/gi,
-      (_match, src: string, ext: string) => {
-        const imgPath = this.resolveAsset(src, buildDir);
-        if (imgPath) {
-          try {
-            const stat = fs.statSync(imgPath);
-            // Só inline se < 100KB
-            if (stat.size < 100 * 1024) {
-              const mime: Record<string, string> = {
-                png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-                svg: 'image/svg+xml', webp: 'image/webp', gif: 'image/gif',
-              };
-              const data = fs.readFileSync(imgPath);
-              const b64 = data.toString('base64');
-              const dataUri = `data:${mime[ext] || 'application/octet-stream'};base64,${b64}`;
-              return _match.replace(src, dataUri);
-            }
-          } catch { /* ignorar */ }
+      /url\(\s*["']?(\/[^"')]+)["']?\s*\)/gi,
+      (_match, assetPath: string) => {
+        const resolved = this.resolveToWebviewUri(assetPath, buildDir, webview);
+        if (resolved) {
+          return `url("${resolved}")`;
         }
         return _match;
       }
@@ -128,43 +186,25 @@ export class PreviewPanel {
     return html;
   }
 
-  /**
-   * Resolve um caminho de asset relativo ao diretório de build.
-   * Trata corretamente paths com / inicial no Windows.
-   */
-  private resolveAsset(href: string, buildDir: string): string | null {
-    // Limpar query string e hash
-    let clean = href.split('?')[0].split('#')[0];
-
-    // Remover / inicial para evitar path.join tratar como absoluto no Windows
+  private resolveToWebviewUri(
+    assetPath: string,
+    buildDir: string,
+    webview: vscode.Webview
+  ): string | null {
+    let clean = assetPath.split('?')[0].split('#')[0];
     if (clean.startsWith('/')) {
       clean = clean.slice(1);
     }
 
-    // Tentar no diretório de build
-    const fromBuild = path.join(buildDir, clean);
-    if (fs.existsSync(fromBuild)) {
-      return fromBuild;
+    const filePath = path.join(buildDir, clean);
+    if (fs.existsSync(filePath)) {
+      const uri = vscode.Uri.file(filePath);
+      return webview.asWebviewUri(uri).toString();
     }
 
     return null;
   }
 
-  private tryReadConfig(projectRoot: string): { outputDir?: string } | null {
-    try {
-      const raw = fs.readFileSync(
-        path.join(projectRoot, 'prerender.config.json'),
-        'utf-8'
-      );
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Extrai texto visível do HTML (sem tags).
-   */
   private extractText(html: string): string {
     return html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
@@ -179,79 +219,18 @@ export class PreviewPanel {
       .trim();
   }
 
-  private buildHtml(renderedHtml: string, projectRoot?: string): string {
-    const nonce = getNonce();
-    const sizeKb = (Buffer.byteLength(renderedHtml, 'utf-8') / 1024).toFixed(1);
-
-    // HTML com CSS inline para o iframe renderizado
-    const inlined = this.inlineAssets(renderedHtml, projectRoot);
-    const inlinedEscaped = esc(inlined);
-
-    // Código-fonte original
-    const sourceEscaped = esc(renderedHtml);
-
-    // Texto puro extraído
-    const rawText = esc(this.extractText(renderedHtml));
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; frame-src blob: data:;">
-  <title>${t('preview.title', { path: this.routePath })}</title>
-  <style nonce="${nonce}">
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:var(--vscode-font-family);font-size:12px;color:var(--vscode-foreground);background:var(--vscode-editor-background)}
-    .toolbar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--vscode-sideBar-background,var(--vscode-editor-background));border-bottom:1px solid var(--vscode-widget-border);position:sticky;top:0;z-index:10}
-    .toolbar strong{font-size:13px}
-    .toolbar .info{color:var(--vscode-descriptionForeground);font-size:11px}
-    .tabs{display:flex;gap:3px;margin-left:auto}
-    .tab{padding:4px 12px;border:none;border-radius:3px;cursor:pointer;font-size:11px;font-weight:600;background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);transition:background .15s}
-    .tab:hover{background:var(--vscode-button-secondaryHoverBackground)}
-    .tab.active{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
-    .view{display:none;height:calc(100vh - 42px);overflow:auto}
-    .view.active{display:block}
-    .source-code{padding:12px;font-family:var(--vscode-editor-font-family);font-size:var(--vscode-editor-font-size,13px);white-space:pre-wrap;word-break:break-all;line-height:1.5;tab-size:2}
-    .raw-text{padding:16px;font-family:var(--vscode-font-family);font-size:13px;line-height:1.6;color:var(--vscode-foreground);white-space:pre-wrap}
-    .render-frame{width:100%;height:100%;border:none;background:#fff}
-  </style>
-</head>
-<body>
-  <div class="toolbar">
-    <strong>${escAttr(this.routePath)}</strong>
-    <span class="info">${sizeKb} KB</span>
-    <div class="tabs">
-      <button class="tab active" data-view="rendered">${t('preview.rendered')}</button>
-      <button class="tab" data-view="source">${t('preview.source')}</button>
-      <button class="tab" data-view="raw">${t('preview.raw')}</button>
-    </div>
-  </div>
-
-  <div class="view active" id="rendered">
-    <iframe class="render-frame" sandbox="allow-same-origin allow-scripts" srcdoc="${inlinedEscaped}"></iframe>
-  </div>
-
-  <div class="view" id="source">
-    <pre class="source-code">${sourceEscaped}</pre>
-  </div>
-
-  <div class="view" id="raw">
-    <div class="raw-text">${rawText}</div>
-  </div>
-
-  <script nonce="${nonce}">
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById(tab.dataset.view).classList.add('active');
-      });
-    });
-  </script>
-</body>
-</html>`;
+  private static resolveBuildDir(projectRoot: string): string {
+    if (!projectRoot) { return ''; }
+    try {
+      const raw = fs.readFileSync(
+        path.join(projectRoot, 'prerender.config.json'),
+        'utf-8'
+      );
+      const config = JSON.parse(raw);
+      return path.join(projectRoot, config.outputDir || 'prerender-build');
+    } catch {
+      return path.join(projectRoot, 'prerender-build');
+    }
   }
 }
 
@@ -262,7 +241,7 @@ function getNonce(): string {
   return r;
 }
 
-function esc(text: string): string {
+function escHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
