@@ -452,30 +452,59 @@ async function main() {
   const server = createStaticServer(OUTPUT_DIR);
   await new Promise((resolve) => server.listen(port, resolve));
 
-  // 5. Render
+  // 5. Render — paralelo com pool de páginas
+  const CONCURRENCY = Math.min(ROUTES.length, 4);
+
   const browser = await puppeteer.default.launch({
     headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--no-first-run',
+    ],
   });
 
-  const total = ROUTES.length;
+  // Pool de páginas reutilizáveis
+  const pagePool = [];
+  for (let i = 0; i < CONCURRENCY; i++) {
+    const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      // Bloquear recursos pesados que não afetam o HTML
+      const type = req.resourceType();
+      if (['image', 'media', 'font'].includes(type)) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+    pagePool.push(page);
+  }
 
-  for (let i = 0; i < ROUTES.length; i++) {
-    const route = ROUTES[i];
-    progress({ step: 'render', status: 'start', route: route.path, current: i + 1, total });
+  const total = ROUTES.length;
+  let completed = 0;
+  const queue = [...ROUTES.map((r, i) => ({ ...r, index: i }))];
+
+  async function renderRoute(page, route) {
+    const num = route.index + 1;
+    progress({ step: 'render', status: 'start', route: route.path, current: num, total });
 
     try {
-      const page = await browser.newPage();
       await page.goto('http://localhost:' + port + route.path, {
-        waitUntil: 'networkidle0',
-        timeout: 30000,
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,
       });
 
+      // Esperar pelo seletor do app (rápido, sem setTimeout extra)
       try {
-        await page.waitForSelector(route.waitForSelector, { timeout: route.waitTime });
-      } catch { /* seletor não encontrado, usar o que tem */ }
+        await page.waitForSelector(route.waitForSelector, { timeout: Math.min(route.waitTime, 5000) });
+      } catch { /* continuar com o que tem */ }
 
-      await new Promise((r) => setTimeout(r, Math.min(route.waitTime, 3000)));
+      // Esperar rede acalmar brevemente (muito mais rápido que networkidle0)
+      await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
 
       let html = await page.content();
 
@@ -496,31 +525,38 @@ async function main() {
       }
 
       fs.writeFileSync(outputPath, html, 'utf-8');
-      await page.close();
+      completed++;
 
-      const result = {
-        path: route.path,
-        status: 'done',
-        originalSize,
-        renderedSize,
-        seo,
-      };
-
-      progress({ step: 'render', status: 'done', route: route.path, current: i + 1, total, result });
+      progress({ step: 'render', status: 'done', route: route.path, current: completed, total, result: {
+        path: route.path, status: 'done', originalSize, renderedSize, seo,
+      }});
     } catch (err) {
-      const result = {
-        path: route.path,
-        status: 'error',
-        originalSize,
-        renderedSize: 0,
-        seo: { hasTitle: false, title: '', hasMetaDescription: false, metaDescription: '', hasOgTitle: false, hasOgDescription: false, hasOgImage: false, hasCanonical: false, hasLang: false, hasViewport: false, warnings: [], score: 0 },
+      completed++;
+      progress({ step: 'render', status: 'error', route: route.path, current: completed, total, message: err.message, result: {
+        path: route.path, status: 'error', originalSize, renderedSize: 0,
+        seo: { hasTitle:false, title:'', hasMetaDescription:false, metaDescription:'', hasOgTitle:false, hasOgDescription:false, hasOgImage:false, hasCanonical:false, hasLang:false, hasViewport:false, warnings:[], score:0 },
         error: err.message,
-      };
-
-      progress({ step: 'render', status: 'error', route: route.path, current: i + 1, total, message: err.message, result });
+      }});
     }
   }
 
+  // Processar fila com pool paralelo
+  async function processQueue() {
+    const workers = pagePool.map(async (page) => {
+      while (queue.length > 0) {
+        const route = queue.shift();
+        if (route) {
+          await renderRoute(page, route);
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  await processQueue();
+
+  // Cleanup
+  for (const page of pagePool) { await page.close(); }
   await browser.close();
   server.close();
 
