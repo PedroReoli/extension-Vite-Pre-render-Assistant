@@ -53,6 +53,7 @@ export const es = {
   'results.totalSize': 'Total',
   'results.sizeComparison': 'SPA original: {original} → Pre-renderizado: {rendered}',
   'results.sizeGain': '(+{diff} de contenido)',
+  'results.checks': 'verificaciones',
   'results.openFolder': 'Abrir carpeta',
   'results.preview': 'Preview',
   'results.completedWithErrors': 'Completado con errores',
@@ -85,7 +86,9 @@ export const es = {
 
   // Preview
   'preview.title': 'Preview: {path}',
+  'preview.rendered': 'Renderizado',
   'preview.source': 'Código',
+  'preview.raw': 'Texto',
   'preview.render': 'Preview',
 
   // Output channel
@@ -117,6 +120,9 @@ export const es = {
   'seo.noCanonical': 'Sin link canonical',
   'seo.noLang': 'Sin atributo lang en <html>',
   'seo.noViewport': 'Sin meta viewport',
+  'seo.allGood': 'Todas las verificaciones SEO pasaron para esta ruta!',
+  'seo.selectTags': 'Selecciona meta tags para copiar ({route})',
+  'seo.copiedToClipboard': '{count} meta tag(s) copiada(s) al portapapeles.',
 
   // Premium / Licensing
   'premium.badge': 'PRO',

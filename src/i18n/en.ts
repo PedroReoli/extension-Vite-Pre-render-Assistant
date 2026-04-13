@@ -53,6 +53,7 @@ export const en = {
   'results.totalSize': 'Total',
   'results.sizeComparison': 'SPA original: {original} → Pre-rendered: {rendered}',
   'results.sizeGain': '(+{diff} of content)',
+  'results.checks': 'checks passed',
   'results.openFolder': 'Open folder',
   'results.preview': 'Preview',
   'results.completedWithErrors': 'Completed with errors',
@@ -85,7 +86,9 @@ export const en = {
 
   // Preview
   'preview.title': 'Preview: {path}',
+  'preview.rendered': 'Rendered',
   'preview.source': 'Source',
+  'preview.raw': 'Text',
   'preview.render': 'Preview',
 
   // Output channel
@@ -117,6 +120,9 @@ export const en = {
   'seo.noCanonical': 'Missing link canonical',
   'seo.noLang': 'Missing lang attribute on <html>',
   'seo.noViewport': 'Missing meta viewport',
+  'seo.allGood': 'All SEO checks passed for this route!',
+  'seo.selectTags': 'Select meta tags to copy ({route})',
+  'seo.copiedToClipboard': '{count} meta tag(s) copied to clipboard.',
 
   // Premium / Licensing
   'premium.badge': 'PRO',

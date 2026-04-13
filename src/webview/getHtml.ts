@@ -180,62 +180,82 @@ function buildView(state: BuildState): string {
 function resultsView(results: BuildResults, outputDir: string): string {
   const avgScore = results.routes.length > 0
     ? Math.round(results.routes.reduce((s, r) => s + r.seo.score, 0) / results.routes.length) : 0;
+  const successCount = results.routes.filter((r) => r.status === 'done').length;
+  const errorCount = results.routes.length - successCount;
+  const diff = results.totalRenderedSize - results.totalOriginalSize;
 
   const routeCards = results.routes.map((r) => {
     const seo = r.seo;
-    const warnings = seo.warnings.map((w) => `<div class="warn-item">⚠ ${e(translateWarning(w))}</div>`).join('');
-
-    const actionBtns = `
-        <button class="btn btn-sec btn-sm fix-seo-btn" data-path="${e(r.path)}">${t('premium.fixSeo')}</button>
-        <button class="btn btn-sec btn-sm ai-suggest-btn" data-path="${e(r.path)}">${t('premium.aiSuggest')}</button>`;
+    const grade = seoGrade(seo.score);
+    const warnings = seo.warnings.map((w) => `<div class="warn-item">${e(translateWarning(w))}</div>`).join('');
+    const passCount = [seo.hasTitle, seo.hasMetaDescription, seo.hasOgTitle, seo.hasOgDescription, seo.hasOgImage, seo.hasCanonical, seo.hasLang, seo.hasViewport].filter(Boolean).length;
 
     return `
     <div class="result-card">
-      <div class="rc-header">
-        <span class="rp">${e(r.path)}</span>
-        <span class="seo-score seo-${seoGrade(seo.score)}">${seo.score}/100</span>
-        <span class="size-tag">${fmtSize(r.originalSize)} → ${fmtSize(r.renderedSize)}</span>
-        <button class="btn btn-sec btn-sm preview-btn" data-path="${e(r.path)}">${t('results.preview')}</button>
-        ${actionBtns}
+      <div class="rc-top">
+        <div class="rc-route">
+          <span class="rp">${e(r.path)}</span>
+          <span class="size-tag">${fmtSize(r.originalSize)} → ${fmtSize(r.renderedSize)}</span>
+        </div>
+        <div class="rc-score-ring seo-${grade}">
+          <span class="rc-score-num">${seo.score}</span>
+        </div>
       </div>
-      <div class="rc-tags">
+      <div class="rc-checks">
+        <span class="rc-check-summary">${passCount}/8 ${t('results.checks')}</span>
         ${tag('title', seo.hasTitle)}${tag('description', seo.hasMetaDescription)}
         ${tag('og:title', seo.hasOgTitle)}${tag('og:desc', seo.hasOgDescription)}
         ${tag('og:image', seo.hasOgImage)}${tag('canonical', seo.hasCanonical)}
         ${tag('lang', seo.hasLang)}${tag('viewport', seo.hasViewport)}
       </div>
       ${warnings ? `<div class="rc-warnings">${warnings}</div>` : ''}
+      <div class="rc-actions">
+        <button class="btn btn-sec btn-sm preview-btn" data-path="${e(r.path)}">${t('results.preview')}</button>
+        <button class="btn btn-sec btn-sm fix-seo-btn" data-path="${e(r.path)}">${t('premium.fixSeo')}</button>
+        <button class="btn btn-sec btn-sm ai-suggest-btn" data-path="${e(r.path)}">${t('premium.aiSuggest')}</button>
+      </div>
     </div>`;
   }).join('');
-
-  const diff = results.totalRenderedSize - results.totalOriginalSize;
 
   return `
   <div class="section">
     <div class="lbl">${t('results.title')}</div>
+
     <div class="result-summary">
       <div class="rs-item">
-        <div class="rs-val">${results.routes.length}</div><div class="rs-label">${t('results.routes')}</div>
+        <div class="rs-val">${successCount}<span class="rs-sub">/${results.routes.length}</span></div>
+        <div class="rs-label">${t('results.routes')}</div>
       </div>
       <div class="rs-item">
-        <div class="rs-val seo-${seoGrade(avgScore)}">${avgScore}</div><div class="rs-label">${t('results.avgSeo')}</div>
+        <div class="rs-val seo-${seoGrade(avgScore)}">${avgScore}</div>
+        <div class="rs-label">${t('results.avgSeo')}</div>
       </div>
       <div class="rs-item">
-        <div class="rs-val">${fmtSize(results.totalRenderedSize)}</div><div class="rs-label">${t('results.totalSize')}</div>
+        <div class="rs-val">${fmtSize(results.totalRenderedSize)}</div>
+        <div class="rs-label">${t('results.totalSize')}</div>
       </div>
     </div>
+
     <div class="size-comparison">
-      ${t('results.sizeComparison', {
-        original: fmtSize(results.totalOriginalSize),
-        rendered: fmtSize(results.totalRenderedSize),
-      })}
-      <strong>${t('results.sizeGain', { diff: fmtSize(diff) })}</strong>
+      <div class="sc-bar">
+        <div class="sc-original" style="flex:${results.totalOriginalSize}"></div>
+        <div class="sc-rendered" style="flex:${results.totalRenderedSize}"></div>
+      </div>
+      <div class="sc-text">
+        ${t('results.sizeComparison', {
+          original: fmtSize(results.totalOriginalSize),
+          rendered: fmtSize(results.totalRenderedSize),
+        })}
+        <strong>${t('results.sizeGain', { diff: fmtSize(diff) })}</strong>
+      </div>
     </div>
+
     ${routeCards}
-    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn btn-sec" id="openFolder" style="flex:1">${t('results.openFolder')}</button>
-      <button class="btn btn-sec" id="exportReport" style="flex:1">${t('premium.exportReport')}</button>
-      <button class="btn btn-pri" id="backBtn" style="flex:1">${t('build.back')}</button>
+
+    <div class="results-footer">
+      <button class="btn btn-sec" id="openFolder">${t('results.openFolder')}</button>
+      <button class="btn btn-sec" id="exportReport">${t('premium.exportReport')}</button>
+      <button class="btn btn-pri" id="backBtn">${t('build.back')}</button>
     </div>
   </div>`;
 }
@@ -332,17 +352,28 @@ body{font-family:var(--vscode-font-family);font-size:12px;color:var(--vscode-for
 .seo-bad{background:rgba(220,53,69,.12);color:var(--vscode-errorForeground)}
 .size-tag{font-size:9px;color:var(--vscode-descriptionForeground);flex-shrink:0}
 .result-summary{display:flex;gap:6px;margin-bottom:8px}
-.rs-item{flex:1;text-align:center;padding:8px 4px;background:rgba(128,128,128,.06);border-radius:4px}
-.rs-val{font-size:16px;font-weight:700}.rs-label{font-size:9px;color:var(--vscode-descriptionForeground);margin-top:2px}
-.size-comparison{font-size:11px;color:var(--vscode-descriptionForeground);margin-bottom:8px;padding:6px 8px;background:rgba(40,167,69,.06);border-radius:4px}
-.size-comparison strong{color:var(--vscode-foreground)}
-.result-card{border:1px solid var(--vscode-widget-border,rgba(128,128,128,.15));border-radius:4px;padding:6px 8px;margin-bottom:6px}
-.rc-header{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.rc-tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
-.stag{font-size:9px;padding:1px 4px;border-radius:2px}
+.rs-item{flex:1;text-align:center;padding:10px 4px;background:rgba(128,128,128,.06);border-radius:6px;border:1px solid var(--vscode-widget-border,rgba(128,128,128,.1))}
+.rs-val{font-size:18px;font-weight:700}.rs-sub{font-size:11px;font-weight:400;color:var(--vscode-descriptionForeground)}.rs-label{font-size:9px;color:var(--vscode-descriptionForeground);margin-top:3px;text-transform:uppercase;letter-spacing:.3px}
+.size-comparison{margin-bottom:10px;padding:8px;background:rgba(128,128,128,.04);border-radius:6px;border:1px solid var(--vscode-widget-border,rgba(128,128,128,.1))}
+.sc-bar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:6px;background:rgba(128,128,128,.1)}
+.sc-original{background:var(--vscode-descriptionForeground);opacity:.3;border-radius:3px 0 0 3px}
+.sc-rendered{background:#28a745;border-radius:0 3px 3px 0}
+.sc-text{font-size:10px;color:var(--vscode-descriptionForeground)}.sc-text strong{color:var(--vscode-foreground)}
+.result-card{border:1px solid var(--vscode-widget-border,rgba(128,128,128,.12));border-radius:6px;padding:8px 10px;margin-bottom:8px;background:rgba(128,128,128,.02)}
+.rc-top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.rc-route{flex:1;min-width:0}.rc-route .rp{font-size:13px;font-weight:600;display:block}.rc-route .size-tag{margin-top:2px;display:block}
+.rc-score-ring{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:3px solid currentColor}
+.rc-score-ring.seo-good{color:#28a745}.rc-score-ring.seo-mid{color:#d49e00}.rc-score-ring.seo-bad{color:var(--vscode-errorForeground)}
+.rc-score-num{font-size:12px;font-weight:700}
+.rc-checks{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px;align-items:center}
+.rc-check-summary{font-size:9px;color:var(--vscode-descriptionForeground);margin-right:4px;font-weight:600}
+.stag{font-size:9px;padding:1px 5px;border-radius:3px;font-weight:500}
 .stag-ok{background:rgba(40,167,69,.1);color:#28a745}.stag-no{background:rgba(220,53,69,.08);color:var(--vscode-errorForeground)}
-.rc-warnings{margin-top:4px;font-size:10px;color:#d49e00}
-.warn-item{padding:1px 0}
+.rc-warnings{margin-top:5px;padding:5px 8px;background:rgba(255,193,7,.06);border-radius:4px;border-left:2px solid #d49e00}
+.warn-item{padding:1px 0;font-size:10px;color:#d49e00}
+.rc-actions{display:flex;gap:4px;margin-top:6px;padding-top:6px;border-top:1px solid var(--vscode-widget-border,rgba(128,128,128,.1))}
+.rc-actions .btn{flex:1}
+.results-footer{display:flex;gap:6px;margin-top:10px}.results-footer .btn{flex:1}
 `;
 
 const JS = `

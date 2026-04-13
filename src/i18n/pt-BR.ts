@@ -53,6 +53,7 @@ export const ptBR = {
   'results.totalSize': 'Total',
   'results.sizeComparison': 'SPA original: {original} → Pré-renderizado: {rendered}',
   'results.sizeGain': '(+{diff} de conteúdo)',
+  'results.checks': 'verificações',
   'results.openFolder': 'Abrir pasta',
   'results.preview': 'Preview',
   'results.completedWithErrors': 'Concluído com erros',
@@ -85,7 +86,9 @@ export const ptBR = {
 
   // Preview
   'preview.title': 'Preview: {path}',
+  'preview.rendered': 'Renderizado',
   'preview.source': 'Código',
+  'preview.raw': 'Texto',
   'preview.render': 'Preview',
 
   // Output channel
@@ -117,6 +120,9 @@ export const ptBR = {
   'seo.noCanonical': 'Sem link canonical',
   'seo.noLang': 'Sem atributo lang no <html>',
   'seo.noViewport': 'Sem meta viewport',
+  'seo.allGood': 'Todas as verificações SEO passaram para esta rota!',
+  'seo.selectTags': 'Selecione meta tags para copiar ({route})',
+  'seo.copiedToClipboard': '{count} meta tag(s) copiada(s) para o clipboard.',
 
   // Premium / Licensing
   'premium.badge': 'PRO',

@@ -4,6 +4,7 @@ import { RouteScanner } from '../routeScanner';
 import { Runner, BuildProgress } from '../runner';
 import { ConfigManager, BuildResults } from '../configManager';
 import { PreviewPanel } from './previewPanel';
+import { generateMetaTags, MetaTagSuggestion } from '../seo/metaTagGenerator';
 import { getHtml, ViewState, BuildState } from './getHtml';
 import { t } from '../i18n';
 
@@ -166,7 +167,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     if (!routePath || !this.runner || !this.configManager) { return; }
     const config = this.configManager.read();
     const html = this.runner.getRenderedHtml(routePath, config?.outputDir || 'prerender-build');
-    if (html) { PreviewPanel.show(routePath, html); }
+    if (html) { PreviewPanel.show(routePath, html, this.configManager?.getProjectRoot()); }
     else { vscode.window.showWarningMessage(t('error.htmlNotFound', { path: routePath })); }
   }
 
@@ -190,9 +191,56 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private handleFixSeo(routePath?: string): void {
-    if (!routePath) { return; }
-    // Fase 3
-    vscode.window.showInformationMessage(`Fix SEO: ${routePath} — coming soon.`);
+    if (!routePath || !this.configManager || !this.runner) { return; }
+
+    // Buscar resultado SEO da rota
+    const results = this.configManager.readBuildResults();
+    if (!results) {
+      vscode.window.showWarningMessage(t('error.noResults'));
+      return;
+    }
+
+    const routeResult = results.routes.find((r) => r.path === routePath);
+    if (!routeResult) { return; }
+
+    // Buscar HTML renderizado
+    const config = this.configManager.read();
+    const outputDir = config?.outputDir || 'prerender-build';
+    const html = this.runner.getRenderedHtml(routePath, outputDir);
+    if (!html) {
+      vscode.window.showWarningMessage(t('error.htmlNotFound', { path: routePath }));
+      return;
+    }
+
+    // Gerar sugestões
+    const suggestions = generateMetaTags(html, routePath, routeResult.seo);
+    if (suggestions.length === 0) {
+      vscode.window.showInformationMessage(t('seo.allGood'));
+      return;
+    }
+
+    // Mostrar sugestões como quick pick
+    const items = suggestions.map((s) => ({
+      label: `${s.action === 'add' ? '+' : '~'} ${s.type}`,
+      description: s.value,
+      detail: s.tag,
+      suggestion: s,
+    }));
+
+    vscode.window.showQuickPick(items, {
+      canPickMany: true,
+      placeHolder: t('seo.selectTags', { route: routePath }),
+    }).then((selected) => {
+      if (!selected || selected.length === 0) { return; }
+
+      // Copiar as tags para o clipboard
+      const tags = selected.map((s) => s.detail).join('\n');
+      vscode.env.clipboard.writeText(tags).then(() => {
+        vscode.window.showInformationMessage(
+          t('seo.copiedToClipboard', { count: selected.length })
+        );
+      });
+    });
   }
 
   private handleAiSuggest(routePath?: string): void {
