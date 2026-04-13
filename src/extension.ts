@@ -13,19 +13,20 @@ export function activate(context: vscode.ExtensionContext): void {
   const isVite = detection.isVite && !!detection.rootPath;
   const rootPath = detection.rootPath;
 
+  let configManager: ConfigManager | undefined;
   let routeManager: RouteManager | undefined;
   let routeScanner: RouteScanner | undefined;
 
   if (isVite && rootPath) {
-    const configManager = new ConfigManager(rootPath);
+    configManager = new ConfigManager(rootPath);
     routeManager = new RouteManager(configManager);
     routeScanner = new RouteScanner(rootPath);
     runner = new Runner(rootPath);
   }
 
-  // Sidebar sempre registrada
   const sidebarProvider = new SidebarProvider(
     context.extensionUri,
+    configManager,
     routeManager,
     runner,
     routeScanner,
@@ -39,28 +40,26 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  // Comando: focar sidebar
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.openPanel', () => {
       vscode.commands.executeCommand('vitePrerender.sidebarView.focus');
     })
   );
 
-  // Comando: executar
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.run', () => {
-      if (!runner || !routeManager) {
+      if (!runner || !routeManager || !configManager) {
         vscode.window.showWarningMessage(
           'Este projeto não foi detectado como um projeto Vite.'
         );
         return;
       }
+      const config = configManager.read() || configManager.ensureExists();
       const enabled = routeManager.listEnabledRoutes();
-      runner.run(enabled);
+      runner.run(enabled, config);
     })
   );
 
-  // Observar mudanças no config
   if (rootPath) {
     const configWatcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(rootPath, 'prerender.config.json')

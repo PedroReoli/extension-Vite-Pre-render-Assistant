@@ -8,9 +8,23 @@ export interface Route {
 
 export interface PrerenderConfig {
   routes: Route[];
+  outputDir: string;
+  waitForSelector: string;
+  waitTime: number;
+  minify: boolean;
+  cleanBefore: boolean;
 }
 
 const CONFIG_FILENAME = 'prerender.config.json';
+
+const DEFAULT_CONFIG: PrerenderConfig = {
+  routes: [{ path: '/', enabled: true }],
+  outputDir: 'prerender-build',
+  waitForSelector: '#app, #root, [data-app]',
+  waitTime: 2000,
+  minify: false,
+  cleanBefore: true,
+};
 
 /**
  * Gerencia leitura e escrita do prerender.config.json.
@@ -19,8 +33,12 @@ const CONFIG_FILENAME = 'prerender.config.json';
 export class ConfigManager {
   private configPath: string;
 
-  constructor(projectRoot: string) {
+  constructor(private projectRoot: string) {
     this.configPath = path.join(projectRoot, CONFIG_FILENAME);
+  }
+
+  getProjectRoot(): string {
+    return this.projectRoot;
   }
 
   getConfigPath(): string {
@@ -31,10 +49,6 @@ export class ConfigManager {
     return fs.existsSync(this.configPath);
   }
 
-  /**
-   * Lê a configuração do arquivo.
-   * Retorna null se o arquivo não existir ou estiver corrompido.
-   */
   read(): PrerenderConfig | null {
     if (!this.exists()) {
       return null;
@@ -44,29 +58,35 @@ export class ConfigManager {
       const raw = fs.readFileSync(this.configPath, 'utf-8');
       const parsed = JSON.parse(raw);
 
-      if (!this.isValidConfig(parsed)) {
+      if (!this.hasValidRoutes(parsed)) {
         return null;
       }
 
-      return parsed as PrerenderConfig;
+      // Merge com defaults para campos ausentes
+      return {
+        ...DEFAULT_CONFIG,
+        ...parsed,
+        routes: parsed.routes,
+      };
     } catch {
       return null;
     }
   }
 
-  /**
-   * Salva a configuração no arquivo.
-   * Cria o arquivo se não existir.
-   */
   write(config: PrerenderConfig): void {
     const content = JSON.stringify(config, null, 2);
     fs.writeFileSync(this.configPath, content, 'utf-8');
   }
 
   /**
-   * Cria o arquivo com configuração padrão se não existir.
-   * Nunca sobrescreve um arquivo existente.
+   * Atualiza apenas as rotas, preservando outras configurações.
    */
+  updateRoutes(routes: Route[]): void {
+    const config = this.read() || { ...DEFAULT_CONFIG };
+    config.routes = routes;
+    this.write(config);
+  }
+
   ensureExists(): PrerenderConfig {
     const existing = this.read();
     if (existing) {
@@ -74,21 +94,16 @@ export class ConfigManager {
     }
 
     if (this.exists()) {
-      // Arquivo existe mas está corrompido — não sobrescrever
       throw new Error(
         `O arquivo ${CONFIG_FILENAME} existe mas está corrompido. Verifique o conteúdo manualmente.`
       );
     }
 
-    const defaultConfig: PrerenderConfig = {
-      routes: [{ path: '/', enabled: true }],
-    };
-
-    this.write(defaultConfig);
-    return defaultConfig;
+    this.write(DEFAULT_CONFIG);
+    return { ...DEFAULT_CONFIG };
   }
 
-  private isValidConfig(obj: unknown): boolean {
+  private hasValidRoutes(obj: unknown): boolean {
     if (typeof obj !== 'object' || obj === null) {
       return false;
     }
