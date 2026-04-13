@@ -1,14 +1,29 @@
 {
   "name": "vite-prerender-assistant",
   "displayName": "Vite Pre-render Assistant",
-  "description": "Automatiza a configuração e execução de pré-render em projetos Vite",
+  "description": "Automates pre-rendering configuration and execution for Vite projects. Scan routes, generate static HTML with Puppeteer, validate SEO, and fix meta tags.",
   "version": "0.1.0",
   "publisher": "reoli",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/reoli/vite-prerender-assistant"
+  },
+  "icon": "resources/logo.png",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Testing"
+  ],
+  "keywords": [
+    "vite",
+    "prerender",
+    "seo",
+    "static",
+    "ssr",
+    "puppeteer"
   ],
   "activationEvents": [
     "workspaceFolderContains:package.json"

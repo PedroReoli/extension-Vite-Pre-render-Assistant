@@ -3,6 +3,12 @@
 src/**
 node_modules/**
 .gitignore
+.gitattributes
 tsconfig.json
+AGENTS.md
+CLAUDE.md
+ENCODING.md
+GEMINI.md
 **/*.ts
 **/*.map
+docs/**
