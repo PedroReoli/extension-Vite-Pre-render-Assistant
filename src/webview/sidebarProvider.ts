@@ -3,6 +3,7 @@ import { RouteManager } from '../routeManager';
 import { RouteScanner } from '../routeScanner';
 import { Runner, BuildProgress } from '../runner';
 import { ConfigManager, BuildResults } from '../configManager';
+import { LicenseManager } from '../licensing/licenseManager';
 import { PreviewPanel } from './previewPanel';
 import { getHtml, ViewState, BuildState } from './getHtml';
 import { t } from '../i18n';
@@ -21,6 +22,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private readonly routeManager: RouteManager | undefined,
     private readonly runner: Runner | undefined,
     private readonly routeScanner: RouteScanner | undefined,
+    private readonly licenseManager: LicenseManager | undefined,
     private readonly isVite: boolean
   ) {
     if (this.runner) {
@@ -53,14 +55,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const config = this.configManager?.read();
     const outputDir = config?.outputDir || 'prerender-build';
     const isOutdated = this.configManager?.isOutdated() || false;
+    const premium = this.licenseManager?.isPremium() || false;
 
     this.view.webview.html = getHtml(
       this.view.webview, routes, this.isVite, this.viewState,
-      this.buildState, outputDir, isOutdated, this.lastResults
+      this.buildState, outputDir, isOutdated, this.lastResults, premium
     );
   }
 
-  private handleMessage(msg: { type: string; path?: string; dir?: string }): void {
+  private handleMessage(msg: { type: string; path?: string; dir?: string; key?: string }): void {
     switch (msg.type) {
       case 'scan': this.handleScan(); break;
       case 'addRoute': if (msg.path && this.routeManager) { this.routeManager.addRoute(msg.path); this.render(); } break;
@@ -75,8 +78,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'preview': this.handlePreview(msg.path); break;
       case 'deployZip': this.handleDeployZip(); break;
       case 'deployCopy': this.handleDeployCopy(); break;
+      // Premium handlers
+      case 'upgrade': this.handleUpgrade(); break;
+      case 'activateLicense': this.handleActivateLicense(msg.key); break;
+      case 'deactivateLicense': this.handleDeactivateLicense(); break;
+      case 'fixSeo': this.handleFixSeo(msg.path); break;
+      case 'aiSuggest': this.handleAiSuggest(msg.path); break;
+      case 'exportReport': this.handleExportReport(); break;
     }
   }
+
+  // ── Route handlers ────────────────────────────────────────────
 
   private handleMoveRoute(routePath?: string, direction?: string): void {
     if (!routePath || !direction || !this.routeManager) { return; }
@@ -100,16 +112,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const existing = new Set(this.routeManager.listRoutes().map((r) => r.path));
       const newRoutes = cache.routes.filter((p) => !existing.has(p));
       if (newRoutes.length === 0) {
-        vscode.window.showInformationMessage(
-          t('scan.cacheValid', { total: cache.routes.length })
-        );
+        vscode.window.showInformationMessage(t('scan.cacheValid', { total: cache.routes.length }));
         return;
       }
       for (const p of newRoutes) { this.routeManager.addRoute(p); }
       this.render();
-      vscode.window.showInformationMessage(
-        t('scan.cacheNewRoutes', { count: newRoutes.length })
-      );
+      vscode.window.showInformationMessage(t('scan.cacheNewRoutes', { count: newRoutes.length }));
       return;
     }
 
@@ -121,34 +129,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const existing = new Set(this.routeManager!.listRoutes().map((r) => r.path));
       let added = 0;
       for (const scanned of found) {
-        if (!existing.has(scanned.path)) {
-          this.routeManager!.addRoute(scanned.path);
-          added++;
-        }
+        if (!existing.has(scanned.path)) { this.routeManager!.addRoute(scanned.path); added++; }
       }
       this.viewState = 'idle';
       this.render();
 
       const total = found.length;
       const alta = found.filter((r) => r.confidence === 'alta').length;
-
-      if (added > 0) {
-        vscode.window.showInformationMessage(t('scan.added', { count: added, total, alta }));
-      } else if (total > 0) {
-        vscode.window.showInformationMessage(t('scan.allExist', { total }));
-      } else {
-        vscode.window.showInformationMessage(t('scan.noneFound'));
-      }
+      if (added > 0) { vscode.window.showInformationMessage(t('scan.added', { count: added, total, alta })); }
+      else if (total > 0) { vscode.window.showInformationMessage(t('scan.allExist', { total })); }
+      else { vscode.window.showInformationMessage(t('scan.noneFound')); }
     }, 50);
   }
 
   private handleRun(): void {
     if (!this.runner || !this.routeManager || !this.configManager) { return; }
     const enabled = this.routeManager.listEnabledRoutes();
-    if (enabled.length === 0) {
-      vscode.window.showWarningMessage(t('build.noRoutes'));
-      return;
-    }
+    if (enabled.length === 0) { vscode.window.showWarningMessage(t('build.noRoutes')); return; }
     const config = this.configManager.read() || this.configManager.ensureExists();
     this.buildState = {
       step: 'install',
@@ -168,9 +165,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private handleShowResults(): void {
     this.lastResults = this.configManager?.readBuildResults() || null;
     if (this.lastResults) {
-      this.viewState = 'results';
-      this.buildState = undefined;
-      this.render();
+      this.viewState = 'results'; this.buildState = undefined; this.render();
     } else {
       vscode.window.showWarningMessage(t('error.noResults'));
     }
@@ -179,13 +174,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private handlePreview(routePath?: string): void {
     if (!routePath || !this.runner || !this.configManager) { return; }
     const config = this.configManager.read();
-    const outputDir = config?.outputDir || 'prerender-build';
-    const html = this.runner.getRenderedHtml(routePath, outputDir);
-    if (html) {
-      PreviewPanel.show(routePath, html);
-    } else {
-      vscode.window.showWarningMessage(t('error.htmlNotFound', { path: routePath }));
-    }
+    const html = this.runner.getRenderedHtml(routePath, config?.outputDir || 'prerender-build');
+    if (html) { PreviewPanel.show(routePath, html); }
+    else { vscode.window.showWarningMessage(t('error.htmlNotFound', { path: routePath })); }
   }
 
   private handleDeployZip(): void {
@@ -200,15 +191,70 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const dest = config?.deploy?.copyTo;
     if (!dest) {
       vscode.window.showInputBox({
-        prompt: t('deploy.copyPrompt'),
-        placeHolder: t('deploy.copyPlaceholder'),
-      }).then((value) => {
-        if (value) { this.runner!.deployTo(outputDir, value); }
-      });
+        prompt: t('deploy.copyPrompt'), placeHolder: t('deploy.copyPlaceholder'),
+      }).then((value) => { if (value) { this.runner!.deployTo(outputDir, value); } });
     } else {
       this.runner.deployTo(outputDir, dest);
     }
   }
+
+  // ── Premium handlers ──────────────────────────────────────────
+
+  private handleUpgrade(): void {
+    const gatewayUrl = vscode.workspace
+      .getConfiguration('vitePrerenderAssistant')
+      .get<string>('gateway.url', 'https://vpar-gateway.vercel.app');
+    vscode.env.openExternal(vscode.Uri.parse(gatewayUrl));
+  }
+
+  private async handleActivateLicense(key?: string): Promise<void> {
+    if (!key || !this.licenseManager) { return; }
+
+    const result = await this.licenseManager.validateKey(key);
+
+    if (result.valid) {
+      vscode.window.showInformationMessage(t('premium.activated'));
+    } else if (result.error === 'invalid_format') {
+      vscode.window.showWarningMessage(t('premium.invalidFormat'));
+    } else if (result.error === 'network_error') {
+      vscode.window.showWarningMessage(t('premium.networkError'));
+    } else {
+      vscode.window.showWarningMessage(t('premium.invalid'));
+    }
+
+    this.render();
+  }
+
+  private handleDeactivateLicense(): void {
+    this.licenseManager?.deactivate();
+    vscode.window.showInformationMessage(t('premium.deactivated'));
+    this.render();
+  }
+
+  private handleFixSeo(routePath?: string): void {
+    if (!routePath) { return; }
+    // Placeholder — Fase 3 implementará o metaTagGenerator
+    vscode.window.showInformationMessage(
+      `Fix SEO: ${routePath} — coming in next update.`
+    );
+  }
+
+  private handleAiSuggest(routePath?: string): void {
+    if (!routePath) { return; }
+    // Placeholder — Fase 4 implementará o aiAdapter
+    vscode.window.showInformationMessage(
+      `AI Suggestions: ${routePath} — coming in next update.`
+    );
+  }
+
+  private handleExportReport(): void {
+    // Placeholder — Fase 5 implementará o reportExporter
+    vscode.window.showInformationMessage(
+      'Export SEO Report — coming in next update.'
+    );
+  }
+
+  // ── Build progress ────────────────────────────────────────────
 
   private onBuildProgress(p: BuildProgress): void {
     if (!this.buildState) { return; }

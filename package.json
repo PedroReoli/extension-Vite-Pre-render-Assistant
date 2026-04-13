@@ -47,6 +47,32 @@
         "title": "Vite Pre-render: Preview"
       }
     ],
+    "configuration": {
+      "title": "Vite Pre-render Assistant",
+      "properties": {
+        "vitePrerenderAssistant.gateway.url": {
+          "type": "string",
+          "default": "https://vpar-gateway.vercel.app",
+          "description": "Premium gateway URL"
+        },
+        "vitePrerenderAssistant.ai.provider": {
+          "type": "string",
+          "enum": ["openai", "claude", "gemini"],
+          "default": "openai",
+          "description": "AI provider for SEO suggestions"
+        },
+        "vitePrerenderAssistant.ai.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for AI-powered SEO suggestions"
+        },
+        "vitePrerenderAssistant.ai.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional: override AI model name"
+        }
+      }
+    },
     "keybindings": [
       {
         "command": "vitePrerender.run",

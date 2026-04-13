@@ -4,6 +4,8 @@ import { ConfigManager } from './configManager';
 import { RouteManager } from './routeManager';
 import { RouteScanner } from './routeScanner';
 import { Runner } from './runner';
+import { LicenseManager } from './licensing/licenseManager';
+import { initPremiumGate } from './licensing/premiumGate';
 import { SidebarProvider } from './webview/sidebarProvider';
 import { initI18n, t } from './i18n';
 
@@ -19,12 +21,23 @@ export function activate(context: vscode.ExtensionContext): void {
   let configManager: ConfigManager | undefined;
   let routeManager: RouteManager | undefined;
   let routeScanner: RouteScanner | undefined;
+  let licenseManager: LicenseManager | undefined;
 
   if (isVite && rootPath) {
     configManager = new ConfigManager(rootPath);
     routeManager = new RouteManager(configManager);
     routeScanner = new RouteScanner(rootPath, configManager);
     runner = new Runner(rootPath, configManager);
+
+    const gatewayUrl = vscode.workspace
+      .getConfiguration('vitePrerenderAssistant')
+      .get<string>('gateway.url', 'https://vpar-gateway.vercel.app');
+
+    licenseManager = new LicenseManager(configManager, gatewayUrl);
+    initPremiumGate(licenseManager);
+
+    // Revalidar licença em background (não bloqueia)
+    licenseManager.revalidate();
   }
 
   const sidebarProvider = new SidebarProvider(
@@ -33,6 +46,7 @@ export function activate(context: vscode.ExtensionContext): void {
     routeManager,
     runner,
     routeScanner,
+    licenseManager,
     isVite
   );
 
@@ -43,14 +57,12 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  // Comando: focar sidebar
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.openPanel', () => {
       vscode.commands.executeCommand('vitePrerender.sidebarView.focus');
     })
   );
 
-  // Comando: executar diretamente (acessível via keybinding)
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.run', () => {
       if (!runner || !routeManager || !configManager) {
@@ -63,16 +75,12 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Comando: preview de rota
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.preview', () => {
-      vscode.window.showInformationMessage(
-        'Use o botão "Preview" nos resultados do pré-render.'
-      );
+      vscode.window.showInformationMessage(t('preview.useButton'));
     })
   );
 
-  // Observar mudanças no config
   if (rootPath) {
     const configWatcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(rootPath, 'prerender.config.json')

@@ -30,12 +30,12 @@ export function getHtml(
   buildState?: BuildState,
   outputDir?: string,
   isOutdated?: boolean,
-  lastResults?: BuildResults | null
+  lastResults?: BuildResults | null,
+  premium: boolean = false
 ): string {
   const n = getNonce();
   const enabled = routes.filter((r) => r.enabled).length;
   const od = outputDir || 'prerender-build';
-  const plural = (count: number) => count !== 1 ? 's' : '';
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -51,22 +51,23 @@ export function getHtml(
   <div class="header">
     <svg viewBox="0 0 24 24" class="hicon"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
     <h2>${t('header.title')}</h2>
+    ${premium ? `<span class="pro-badge">${t('premium.badge')}</span>` : ''}
   </div>
   <div class="status ${isVite ? 'ok' : 'warn'}">
     <span class="dot"></span>
     ${isVite ? t('status.viteDetected') : t('status.viteNotDetected')}
   </div>
   ${!isVite ? `<div class="empty">${t('status.openViteProject')}</div>` : ''}
-  ${isVite && viewState === 'idle' ? idleView(routes, enabled, isOutdated || false, lastResults) : ''}
+  ${isVite && viewState === 'idle' ? idleView(routes, enabled, isOutdated || false, lastResults, premium) : ''}
   ${isVite && viewState === 'scanning' ? scanningView() : ''}
   ${isVite && viewState === 'building' && buildState ? buildView(buildState) : ''}
-  ${isVite && viewState === 'results' && lastResults ? resultsView(lastResults, od) : ''}
+  ${isVite && viewState === 'results' && lastResults ? resultsView(lastResults, od, premium) : ''}
   <script nonce="${n}">${JS}</script>
 </body>
 </html>`;
 }
 
-function idleView(routes: Route[], enabled: number, outdated: boolean, lastResults?: BuildResults | null): string {
+function idleView(routes: Route[], enabled: number, outdated: boolean, lastResults?: BuildResults | null, premium: boolean = false): string {
   const total = routes.length;
   const s = total !== 1 ? 's' : '';
 
@@ -95,8 +96,27 @@ function idleView(routes: Route[], enabled: number, outdated: boolean, lastResul
       <a class="link" id="showResults">${t('lastBuild.viewResults')}</a>
     </div>` : '';
 
+  // Premium banner ou status
+  const premiumSection = premium
+    ? `<div class="premium-active"><span class="pro-badge">${t('premium.badge')}</span> ${t('premium.active')}
+        <a class="link" id="deactivateBtn" style="margin-left:auto">${t('premium.deactivate')}</a>
+       </div>`
+    : `<div class="upgrade-banner">
+        <div class="upgrade-text">
+          <strong>${t('premium.upgradeTitle')}</strong>
+          <span>${t('premium.upgradeDesc')}</span>
+        </div>
+        <button class="btn btn-pri btn-sm" id="upgradeBtn">${t('premium.upgrade')}</button>
+      </div>
+      <div class="license-row">
+        <input class="inp" id="licenseInput" type="text" placeholder="${t('premium.activatePlaceholder')}"/>
+        <button class="btn btn-pri btn-sm" id="activateBtn">${t('premium.activateBtn')}</button>
+      </div>`;
+
   return `
   ${outdatedBanner}
+  ${premiumSection}
+  <div class="div"></div>
   ${lastBuildInfo}
   <div class="section">
     <div class="lbl">${t('scan.title')}</div>
@@ -178,13 +198,17 @@ function buildView(state: BuildState): string {
   </div>`;
 }
 
-function resultsView(results: BuildResults, outputDir: string): string {
+function resultsView(results: BuildResults, outputDir: string, premium: boolean = false): string {
   const avgScore = results.routes.length > 0
     ? Math.round(results.routes.reduce((s, r) => s + r.seo.score, 0) / results.routes.length) : 0;
 
   const routeCards = results.routes.map((r) => {
     const seo = r.seo;
     const warnings = seo.warnings.map((w) => `<div class="warn-item">⚠ ${e(translateWarning(w))}</div>`).join('');
+
+    const premiumBtns = premium ? `
+        <button class="btn btn-sec btn-sm fix-seo-btn" data-path="${e(r.path)}">${t('premium.fixSeo')}</button>
+        <button class="btn btn-sec btn-sm ai-suggest-btn" data-path="${e(r.path)}">${t('premium.aiSuggest')}</button>` : '';
 
     return `
     <div class="result-card">
@@ -193,6 +217,7 @@ function resultsView(results: BuildResults, outputDir: string): string {
         <span class="seo-score seo-${seoGrade(seo.score)}">${seo.score}/100</span>
         <span class="size-tag">${fmtSize(r.originalSize)} → ${fmtSize(r.renderedSize)}</span>
         <button class="btn btn-sec btn-sm preview-btn" data-path="${e(r.path)}">${t('results.preview')}</button>
+        ${premiumBtns}
       </div>
       <div class="rc-tags">
         ${tag('title', seo.hasTitle)}${tag('description', seo.hasMetaDescription)}
@@ -228,8 +253,9 @@ function resultsView(results: BuildResults, outputDir: string): string {
       <strong>${t('results.sizeGain', { diff: fmtSize(diff) })}</strong>
     </div>
     ${routeCards}
-    <div style="margin-top:8px;display:flex;gap:6px">
+    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn btn-sec" id="openFolder" style="flex:1">${t('results.openFolder')}</button>
+      ${premium ? `<button class="btn btn-sec" id="exportReport" style="flex:1">${t('premium.exportReport')}</button>` : ''}
       <button class="btn btn-pri" id="backBtn" style="flex:1">${t('build.back')}</button>
     </div>
   </div>`;
@@ -338,6 +364,11 @@ body{font-family:var(--vscode-font-family);font-size:12px;color:var(--vscode-for
 .stag-ok{background:rgba(40,167,69,.1);color:#28a745}.stag-no{background:rgba(220,53,69,.08);color:var(--vscode-errorForeground)}
 .rc-warnings{margin-top:4px;font-size:10px;color:#d49e00}
 .warn-item{padding:1px 0}
+.pro-badge{font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;letter-spacing:.5px}
+.upgrade-banner{padding:8px;border-radius:4px;background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(139,92,246,.08));border:1px solid rgba(99,102,241,.2);margin-bottom:6px}
+.upgrade-text{margin-bottom:6px}.upgrade-text strong{display:block;font-size:12px;margin-bottom:2px}.upgrade-text span{font-size:10px;color:var(--vscode-descriptionForeground)}
+.license-row{display:flex;gap:4px;margin-bottom:4px}
+.premium-active{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:4px;background:rgba(99,102,241,.08);font-size:11px;margin-bottom:6px}
 `;
 
 const JS = `
@@ -354,10 +385,16 @@ document.addEventListener('click', e => {
   if(id==='showResults') vscode.postMessage({type:'showResults'});
   if(id==='deployZip') vscode.postMessage({type:'deployZip'});
   if(id==='deployCopy') vscode.postMessage({type:'deployCopy'});
+  if(id==='upgradeBtn') vscode.postMessage({type:'upgrade'});
+  if(id==='deactivateBtn') vscode.postMessage({type:'deactivateLicense'});
+  if(id==='exportReport') vscode.postMessage({type:'exportReport'});
+  if(id==='activateBtn'){const i=$('licenseInput');if(i&&i.value.trim()){vscode.postMessage({type:'activateLicense',key:i.value.trim()});i.value='';}}
   if(id==='addBtn'){const i=$('routeInput');if(i&&i.value.trim()){vscode.postMessage({type:'addRoute',path:i.value.trim()});i.value='';}}
   if(t.classList.contains('rm')&&d.path){e.stopPropagation();vscode.postMessage({type:'removeRoute',path:d.path});}
   if(t.classList.contains('mv')&&d.path&&d.dir){e.stopPropagation();vscode.postMessage({type:'moveRoute',path:d.path,dir:d.dir});}
   if(t.classList.contains('preview-btn')&&d.path){vscode.postMessage({type:'preview',path:d.path});}
+  if(t.classList.contains('fix-seo-btn')&&d.path){vscode.postMessage({type:'fixSeo',path:d.path});}
+  if(t.classList.contains('ai-suggest-btn')&&d.path){vscode.postMessage({type:'aiSuggest',path:d.path});}
 });
 document.addEventListener('change', e => {
   const t = e.target;
