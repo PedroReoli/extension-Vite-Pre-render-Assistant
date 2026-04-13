@@ -15,6 +15,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private viewState: ViewState = 'idle';
   private seoFixState?: SeoFixState;
+  private seoFixMap = new Map<string, SeoFixState>();
   private buildState?: BuildState;
   private lastResults?: BuildResults | null;
 
@@ -57,10 +58,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const outputDir = config?.outputDir || 'prerender-build';
     const isOutdated = this.configManager?.isOutdated() || false;
 
+    // Computar rotas com fix aplicado
+    const fixedRoutes = new Set<string>();
+    for (const [routePath, state] of this.seoFixMap) {
+      if (state.allDone) {
+        fixedRoutes.add(routePath);
+      }
+    }
+
     this.view.webview.html = getHtml(
       this.view.webview, routes, this.isVite, this.viewState,
       this.buildState, outputDir, isOutdated, this.lastResults,
-      this.seoFixState
+      this.seoFixState, fixedRoutes
     );
   }
 
@@ -80,9 +89,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'deployZip': this.handleDeployZip(); break;
       case 'deployCopy': this.handleDeployCopy(); break;
       case 'fixSeo': this.handleFixSeo(msg.path); break;
+      case 'fixAllSeo': this.handleFixAllSeo(); break;
       case 'applyFix': this.handleApplyFix(msg.index); break;
       case 'applyAllFixes': this.handleApplyAllFixes(); break;
       case 'rebuild': this.handleRebuild(); break;
+      case 'seoFixBack': this.handleSeoFixBack(); break;
       case 'aiSuggest': this.handleAiSuggest(msg.path); break;
       case 'exportReport': this.handleExportReport(); break;
     }
@@ -196,8 +207,59 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /**
+   * Gera SeoFixState para uma rota (ou restaura do cache).
+   */
+  private buildFixStateForRoute(routePath: string): SeoFixState | null {
+    // Restaurar estado salvo se existir
+    const cached = this.seoFixMap.get(routePath);
+    if (cached) { return cached; }
+
+    if (!this.configManager || !this.runner) { return null; }
+
+    const results = this.configManager.readBuildResults();
+    if (!results) { return null; }
+
+    const routeResult = results.routes.find((r) => r.path === routePath);
+    if (!routeResult) { return null; }
+
+    const config = this.configManager.read();
+    const outputDir = config?.outputDir || 'prerender-build';
+    const html = this.runner.getRenderedHtml(routePath, outputDir);
+    if (!html) { return null; }
+
+    const suggestions = generateMetaTags(html, routePath, routeResult.seo);
+    if (suggestions.length === 0) { return null; }
+
+    const state: SeoFixState = {
+      routePath,
+      suggestions: suggestions.map((s) => ({ suggestion: s, status: 'pending' })),
+      allDone: false,
+    };
+
+    this.seoFixMap.set(routePath, state);
+    return state;
+  }
+
   private handleFixSeo(routePath?: string): void {
-    if (!routePath || !this.configManager || !this.runner) { return; }
+    if (!routePath) { return; }
+
+    const state = this.buildFixStateForRoute(routePath);
+    if (!state) {
+      vscode.window.showInformationMessage(t('seo.allGood'));
+      return;
+    }
+
+    this.seoFixState = state;
+    this.viewState = 'seoFix';
+    this.render();
+  }
+
+  /**
+   * Fix All SEO: gera e aplica correções para todas as rotas de uma vez.
+   */
+  private handleFixAllSeo(): void {
+    if (!this.configManager || !this.runner) { return; }
 
     const results = this.configManager.readBuildResults();
     if (!results) {
@@ -205,29 +267,48 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const routeResult = results.routes.find((r) => r.path === routePath);
-    if (!routeResult) { return; }
+    const projectRoot = this.configManager.getProjectRoot();
+    let totalApplied = 0;
+    let totalErrors = 0;
 
-    const config = this.configManager.read();
-    const outputDir = config?.outputDir || 'prerender-build';
-    const html = this.runner.getRenderedHtml(routePath, outputDir);
-    if (!html) {
-      vscode.window.showWarningMessage(t('error.htmlNotFound', { path: routePath }));
-      return;
+    for (const routeResult of results.routes) {
+      const state = this.buildFixStateForRoute(routeResult.path);
+      if (!state) { continue; }
+
+      for (const item of state.suggestions) {
+        if (item.status !== 'pending') { continue; }
+        const result = applyMetaTag(projectRoot, item.suggestion);
+        if (result.success) {
+          item.status = 'applied';
+          totalApplied++;
+        } else {
+          item.status = 'error';
+          item.error = result.error;
+          totalErrors++;
+        }
+      }
+
+      state.allDone = state.suggestions.every((s) => s.status !== 'pending');
     }
 
-    const suggestions = generateMetaTags(html, routePath, routeResult.seo);
-    if (suggestions.length === 0) {
+    if (totalApplied > 0 || totalErrors > 0) {
+      vscode.window.showInformationMessage(
+        t('seoFix.fixAllResult', { applied: totalApplied, errors: totalErrors })
+      );
+    } else {
       vscode.window.showInformationMessage(t('seo.allGood'));
-      return;
     }
 
-    this.seoFixState = {
-      routePath,
-      suggestions: suggestions.map((s) => ({ suggestion: s, status: 'pending' })),
-      allDone: false,
-    };
-    this.viewState = 'seoFix';
+    this.render();
+  }
+
+  private handleSeoFixBack(): void {
+    // Salvar estado atual antes de voltar
+    if (this.seoFixState) {
+      this.seoFixMap.set(this.seoFixState.routePath, this.seoFixState);
+    }
+    this.seoFixState = undefined;
+    this.viewState = 'results';
     this.render();
   }
 
@@ -248,6 +329,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     this.checkAllDone();
+    this.seoFixMap.set(this.seoFixState.routePath, this.seoFixState);
     this.render();
   }
 
@@ -258,7 +340,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     for (const item of this.seoFixState.suggestions) {
       if (item.status !== 'pending') { continue; }
-
       const result = applyMetaTag(projectRoot, item.suggestion);
       if (result.success) {
         item.status = 'applied';
@@ -269,11 +350,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     this.checkAllDone();
+    this.seoFixMap.set(this.seoFixState.routePath, this.seoFixState);
     this.render();
   }
 
   private handleRebuild(): void {
     this.seoFixState = undefined;
+    this.seoFixMap.clear();
     this.handleRun();
   }
 

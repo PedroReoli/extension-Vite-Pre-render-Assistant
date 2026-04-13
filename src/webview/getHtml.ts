@@ -44,7 +44,8 @@ export function getHtml(
   outputDir?: string,
   isOutdated?: boolean,
   lastResults?: BuildResults | null,
-  seoFixState?: SeoFixState
+  seoFixState?: SeoFixState,
+  fixedRoutes?: Set<string>
 ): string {
   const n = getNonce();
   const enabled = routes.filter((r) => r.enabled).length;
@@ -73,7 +74,7 @@ export function getHtml(
   ${isVite && viewState === 'idle' ? idleView(routes, enabled, isOutdated || false, lastResults) : ''}
   ${isVite && viewState === 'scanning' ? scanningView() : ''}
   ${isVite && viewState === 'building' && buildState ? buildView(buildState) : ''}
-  ${isVite && viewState === 'results' && lastResults ? resultsView(lastResults, od) : ''}
+  ${isVite && viewState === 'results' && lastResults ? resultsView(lastResults, od, fixedRoutes) : ''}
   ${isVite && viewState === 'seoFix' && seoFixState ? seoFixView(seoFixState) : ''}
   <script nonce="${n}">${JS}</script>
 </body>
@@ -192,7 +193,7 @@ function buildView(state: BuildState): string {
   </div>`;
 }
 
-function resultsView(results: BuildResults, outputDir: string): string {
+function resultsView(results: BuildResults, outputDir: string, fixedRoutes?: Set<string>): string {
   const avgScore = results.routes.length > 0
     ? Math.round(results.routes.reduce((s, r) => s + r.seo.score, 0) / results.routes.length) : 0;
   const successCount = results.routes.filter((r) => r.status === 'done').length;
@@ -204,12 +205,14 @@ function resultsView(results: BuildResults, outputDir: string): string {
     const grade = seoGrade(seo.score);
     const warnings = seo.warnings.map((w) => `<div class="warn-item">${e(translateWarning(w))}</div>`).join('');
     const passCount = [seo.hasTitle, seo.hasMetaDescription, seo.hasOgTitle, seo.hasOgDescription, seo.hasOgImage, seo.hasCanonical, seo.hasLang, seo.hasViewport].filter(Boolean).length;
+    const isFixed = fixedRoutes?.has(r.path) || false;
 
     return `
-    <div class="result-card">
+    <div class="result-card ${isFixed ? 'rc-fixed' : ''}">
       <div class="rc-top">
         <div class="rc-route">
           <span class="rp">${e(r.path)}</span>
+          ${isFixed ? `<span class="rc-fixed-badge">${t('seoFix.fixed')}</span>` : ''}
           <span class="size-tag">${fmtSize(r.originalSize)} → ${fmtSize(r.renderedSize)}</span>
         </div>
         <div class="rc-score-ring seo-${grade}">
@@ -226,7 +229,7 @@ function resultsView(results: BuildResults, outputDir: string): string {
       ${warnings ? `<div class="rc-warnings">${warnings}</div>` : ''}
       <div class="rc-actions">
         <button class="btn btn-sec btn-sm preview-btn" data-path="${e(r.path)}">${t('results.preview')}</button>
-        <button class="btn btn-sec btn-sm fix-seo-btn" data-path="${e(r.path)}">${t('premium.fixSeo')}</button>
+        <button class="btn btn-sec btn-sm fix-seo-btn" data-path="${e(r.path)}">${isFixed ? '✓ ' : ''}${t('premium.fixSeo')}</button>
         <button class="btn btn-sec btn-sm ai-suggest-btn" data-path="${e(r.path)}">${t('premium.aiSuggest')}</button>
       </div>
     </div>`;
@@ -265,7 +268,16 @@ function resultsView(results: BuildResults, outputDir: string): string {
       </div>
     </div>
 
+    <button class="btn btn-pri" id="fixAllSeo" style="margin-bottom:8px">
+      ${t('seoFix.fixAll')}
+    </button>
+
     ${routeCards}
+
+    ${fixedRoutes && fixedRoutes.size > 0 ? `
+    <button class="btn btn-pri" id="rebuildBtn" style="margin-bottom:6px">
+      ${t('seoFix.rebuild')}
+    </button>` : ''}
 
     <div class="results-footer">
       <button class="btn btn-sec" id="openFolder">${t('results.openFolder')}</button>
@@ -451,6 +463,8 @@ body{font-family:var(--vscode-font-family);font-size:12px;color:var(--vscode-for
 .warn-item{padding:1px 0;font-size:10px;color:#d49e00}
 .rc-actions{display:flex;gap:4px;margin-top:6px;padding-top:6px;border-top:1px solid var(--vscode-widget-border,rgba(128,128,128,.1))}
 .rc-actions .btn{flex:1}
+.rc-fixed{border-color:rgba(40,167,69,.3)}
+.rc-fixed-badge{font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:rgba(40,167,69,.12);color:#28a745}
 .results-footer{display:flex;gap:6px;margin-top:10px}.results-footer .btn{flex:1}
 .sf-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .sf-back{background:none;border:none;color:var(--vscode-foreground);cursor:pointer;font-size:16px;padding:2px 6px;border-radius:3px}
@@ -486,9 +500,10 @@ document.addEventListener('click', e => {
   if(id==='deployZip') vscode.postMessage({type:'deployZip'});
   if(id==='deployCopy') vscode.postMessage({type:'deployCopy'});
   if(id==='exportReport') vscode.postMessage({type:'exportReport'});
-  if(id==='seoFixBack') vscode.postMessage({type:'showResults'});
-  if(id==='applyAllFixes') vscode.postMessage({type:'applyAllFixes'});
+  if(id==='seoFixBack') vscode.postMessage({type:'seoFixBack'});
+  if(id==='fixAllSeo') vscode.postMessage({type:'fixAllSeo'});
   if(id==='rebuildBtn') vscode.postMessage({type:'rebuild'});
+  if(id==='applyAllFixes') vscode.postMessage({type:'applyAllFixes'});
   if(t.classList.contains('apply-fix-btn')&&d.index!==undefined){vscode.postMessage({type:'applyFix',index:parseInt(d.index)});}
   if(id==='addBtn'){const i=$('routeInput');if(i&&i.value.trim()){vscode.postMessage({type:'addRoute',path:i.value.trim()});i.value='';}}
   if(t.classList.contains('rm')&&d.path){e.stopPropagation();vscode.postMessage({type:'removeRoute',path:d.path});}

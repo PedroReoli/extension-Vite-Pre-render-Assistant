@@ -133,6 +133,9 @@ export const es = {
   'seoFix.progress': '{applied} de {total} aplicada(s)',
   'seoFix.allApplied': 'Todas las correcciones aplicadas!',
   'seoFix.rebuild': 'Reconstruir Pre-render',
+  'seoFix.fixAll': 'Corregir SEO de Todas',
+  'seoFix.fixed': 'corregido',
+  'seoFix.fixAllResult': '{applied} corrección(es) aplicada(s), {errors} error(es).',
 
   // Premium / Licensing
   'premium.badge': 'PRO',

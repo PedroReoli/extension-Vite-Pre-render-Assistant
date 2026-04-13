@@ -133,6 +133,9 @@ export const ptBR = {
   'seoFix.progress': '{applied} de {total} aplicada(s)',
   'seoFix.allApplied': 'Todas as correções aplicadas!',
   'seoFix.rebuild': 'Refazer Pre-render',
+  'seoFix.fixAll': 'Corrigir SEO de Todas',
+  'seoFix.fixed': 'corrigido',
+  'seoFix.fixAllResult': '{applied} correção(ões) aplicada(s), {errors} erro(s).',
 
   // Premium / Licensing
   'premium.badge': 'PRO',
