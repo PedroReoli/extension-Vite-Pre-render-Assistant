@@ -3,7 +3,6 @@ import { RouteManager } from '../routeManager';
 import { RouteScanner } from '../routeScanner';
 import { Runner, BuildProgress } from '../runner';
 import { ConfigManager, BuildResults } from '../configManager';
-import { LicenseManager } from '../licensing/licenseManager';
 import { PreviewPanel } from './previewPanel';
 import { getHtml, ViewState, BuildState } from './getHtml';
 import { t } from '../i18n';
@@ -22,7 +21,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     private readonly routeManager: RouteManager | undefined,
     private readonly runner: Runner | undefined,
     private readonly routeScanner: RouteScanner | undefined,
-    private readonly licenseManager: LicenseManager | undefined,
     private readonly isVite: boolean
   ) {
     if (this.runner) {
@@ -55,15 +53,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const config = this.configManager?.read();
     const outputDir = config?.outputDir || 'prerender-build';
     const isOutdated = this.configManager?.isOutdated() || false;
-    const premium = this.licenseManager?.isPremium() || false;
 
     this.view.webview.html = getHtml(
       this.view.webview, routes, this.isVite, this.viewState,
-      this.buildState, outputDir, isOutdated, this.lastResults, premium
+      this.buildState, outputDir, isOutdated, this.lastResults
     );
   }
 
-  private handleMessage(msg: { type: string; path?: string; dir?: string; key?: string }): void {
+  private handleMessage(msg: { type: string; path?: string; dir?: string }): void {
     switch (msg.type) {
       case 'scan': this.handleScan(); break;
       case 'addRoute': if (msg.path && this.routeManager) { this.routeManager.addRoute(msg.path); this.render(); } break;
@@ -78,17 +75,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'preview': this.handlePreview(msg.path); break;
       case 'deployZip': this.handleDeployZip(); break;
       case 'deployCopy': this.handleDeployCopy(); break;
-      // Premium handlers
-      case 'upgrade': this.handleUpgrade(); break;
-      case 'activateLicense': this.handleActivateLicense(msg.key); break;
-      case 'deactivateLicense': this.handleDeactivateLicense(); break;
       case 'fixSeo': this.handleFixSeo(msg.path); break;
       case 'aiSuggest': this.handleAiSuggest(msg.path); break;
       case 'exportReport': this.handleExportReport(); break;
     }
   }
-
-  // ── Route handlers ────────────────────────────────────────────
 
   private handleMoveRoute(routePath?: string, direction?: string): void {
     if (!routePath || !direction || !this.routeManager) { return; }
@@ -198,63 +189,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  // ── Premium handlers ──────────────────────────────────────────
-
-  private handleUpgrade(): void {
-    const gatewayUrl = vscode.workspace
-      .getConfiguration('vitePrerenderAssistant')
-      .get<string>('gateway.url', 'https://vpar-gateway.vercel.app');
-    vscode.env.openExternal(vscode.Uri.parse(gatewayUrl));
-  }
-
-  private async handleActivateLicense(key?: string): Promise<void> {
-    if (!key || !this.licenseManager) { return; }
-
-    const result = await this.licenseManager.validateKey(key);
-
-    if (result.valid) {
-      vscode.window.showInformationMessage(t('premium.activated'));
-    } else if (result.error === 'invalid_format') {
-      vscode.window.showWarningMessage(t('premium.invalidFormat'));
-    } else if (result.error === 'network_error') {
-      vscode.window.showWarningMessage(t('premium.networkError'));
-    } else {
-      vscode.window.showWarningMessage(t('premium.invalid'));
-    }
-
-    this.render();
-  }
-
-  private handleDeactivateLicense(): void {
-    this.licenseManager?.deactivate();
-    vscode.window.showInformationMessage(t('premium.deactivated'));
-    this.render();
-  }
-
   private handleFixSeo(routePath?: string): void {
     if (!routePath) { return; }
-    // Placeholder — Fase 3 implementará o metaTagGenerator
-    vscode.window.showInformationMessage(
-      `Fix SEO: ${routePath} — coming in next update.`
-    );
+    // Fase 3
+    vscode.window.showInformationMessage(`Fix SEO: ${routePath} — coming soon.`);
   }
 
   private handleAiSuggest(routePath?: string): void {
     if (!routePath) { return; }
-    // Placeholder — Fase 4 implementará o aiAdapter
-    vscode.window.showInformationMessage(
-      `AI Suggestions: ${routePath} — coming in next update.`
-    );
+    // Fase 4
+    vscode.window.showInformationMessage(`AI Suggestions: ${routePath} — coming soon.`);
   }
 
   private handleExportReport(): void {
-    // Placeholder — Fase 5 implementará o reportExporter
-    vscode.window.showInformationMessage(
-      'Export SEO Report — coming in next update.'
-    );
+    // Fase 5
+    vscode.window.showInformationMessage('Export SEO Report — coming soon.');
   }
-
-  // ── Build progress ────────────────────────────────────────────
 
   private onBuildProgress(p: BuildProgress): void {
     if (!this.buildState) { return; }

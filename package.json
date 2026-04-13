@@ -50,11 +50,6 @@
     "configuration": {
       "title": "Vite Pre-render Assistant",
       "properties": {
-        "vitePrerenderAssistant.gateway.url": {
-          "type": "string",
-          "default": "https://vpar-gateway.vercel.app",
-          "description": "Premium gateway URL"
-        },
         "vitePrerenderAssistant.ai.provider": {
           "type": "string",
           "enum": ["openai", "claude", "gemini"],

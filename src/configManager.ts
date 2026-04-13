@@ -56,7 +56,6 @@ const INTERNAL_DIR = '.viteprerender';
 const CACHE_FILENAME = 'cache.json';
 const RESULTS_FILENAME = 'results.json';
 const SCRIPT_FILENAME = 'prerender.script.mjs';
-const LICENSE_FILENAME = 'license.json';
 
 const DEFAULT_CONFIG: PrerenderConfig = {
   routes: [{ path: '/', enabled: true }],
@@ -251,34 +250,6 @@ export class ConfigManager {
     return latest;
   }
 
-  // ── License ───────────────────────────────────────────────────
-
-  readLicense(): LicenseState | null {
-    try {
-      const licensePath = path.join(this.internalDir, LICENSE_FILENAME);
-      if (!fs.existsSync(licensePath)) {
-        return null;
-      }
-      const raw = fs.readFileSync(licensePath, 'utf-8');
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-
-  writeLicense(state: LicenseState): void {
-    this.ensureInternalDir();
-    const licensePath = path.join(this.internalDir, LICENSE_FILENAME);
-    fs.writeFileSync(licensePath, JSON.stringify(state, null, 2), 'utf-8');
-  }
-
-  deleteLicense(): void {
-    const licensePath = path.join(this.internalDir, LICENSE_FILENAME);
-    if (fs.existsSync(licensePath)) {
-      fs.unlinkSync(licensePath);
-    }
-  }
-
   // ── Validation ────────────────────────────────────────────────
 
   private hasValidRoutes(obj: unknown): boolean {
@@ -315,9 +286,3 @@ export interface BuildResults {
   totalRenderedSize: number;
 }
 
-export interface LicenseState {
-  key: string;
-  activatedAt: string;
-  lastValidated: string;
-  valid: boolean;
-}
