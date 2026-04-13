@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
+import { ConfigManager, ScanCache } from './configManager';
 
 export interface ScannedRoute {
   path: string;
@@ -9,15 +11,16 @@ export interface ScannedRoute {
 }
 
 /**
- * Scanner inteligente de rotas.
+ * Scanner inteligente de rotas com cache.
  *
  * Três estratégias em ordem de confiança:
- * 1. File-based routing (pages/, views/, routes/ com arquivos de página)
- * 2. Configuração de router (router.ts, routes.ts + imports seguidos)
- * 3. Padrões de código (path="/", to="/", etc.)
+ * 1. File-based routing (pages/, views/, routes/)
+ * 2. Configuração de router + imports seguidos
+ * 3. Padrões de código
  */
 export class RouteScanner {
   private readonly rootPath: string;
+  private readonly configManager: ConfigManager;
   private visitedFiles = new Set<string>();
 
   private static readonly SCAN_EXTENSIONS = [
@@ -30,7 +33,6 @@ export class RouteScanner {
     '__tests__', '__mocks__', 'coverage', '.cache',
   ]);
 
-  /** Padrões de file-based routing */
   private static readonly PAGE_DIRS = [
     { dir: 'src/pages', transform: 'filename' },
     { dir: 'src/views', transform: 'filename' },
@@ -39,7 +41,6 @@ export class RouteScanner {
     { dir: 'src/routes', transform: 'svelte' },
   ];
 
-  /** Nomes de arquivos de router */
   private static readonly ROUTER_FILES = [
     'src/router.ts', 'src/router.tsx', 'src/router.js', 'src/router.jsx',
     'src/routes.ts', 'src/routes.tsx', 'src/routes.js', 'src/routes.jsx',
@@ -50,30 +51,40 @@ export class RouteScanner {
     'app/router.ts', 'app/routes.ts',
   ];
 
-  /** Regex para definições de rota em configuração de router */
   private static readonly ROUTER_PATTERNS: RegExp[] = [
-    // { path: '/about' } em objetos de configuração
     /{\s*path\s*:\s*["'`](\/[^"'`]*?)["'`]/g,
-    // createBrowserRouter([{ path: '/about' }])
     /(?:createBrowserRouter|createRouter|createHashRouter)\s*\(\s*\[/g,
   ];
 
-  /** Regex para padrões de código (menor confiança) */
   private static readonly CODE_PATTERNS: RegExp[] = [
-    // <Route path="/about" />
     /<Route\s+[^>]*path\s*=\s*["'`](\/[^"'`]*?)["'`]/g,
-    // path: "/about" genérico
     /path\s*:\s*["'`](\/[^"'`]*?)["'`]/g,
-    // to="/about" em Links
     /\bto\s*=\s*["'`](\/[^"'`]*?)["'`]/g,
-    // navigate("/about")
     /navigate\s*\(\s*["'`](\/[^"'`]*?)["'`]\s*\)/g,
-    // router.push("/about")
     /(?:router|history)\s*\.\s*push\s*\(\s*["'`](\/[^"'`]*?)["'`]\s*\)/g,
   ];
 
-  constructor(rootPath: string) {
+  constructor(rootPath: string, configManager: ConfigManager) {
     this.rootPath = rootPath;
+    this.configManager = configManager;
+  }
+
+  /**
+   * Verifica se o cache ainda é válido (src/ não mudou).
+   * Retorna as rotas do cache se válido, null se precisa re-scan.
+   */
+  checkCache(): { valid: boolean; routes: string[] } {
+    const cache = this.configManager.readCache();
+    if (!cache) {
+      return { valid: false, routes: [] };
+    }
+
+    const currentHash = this.computeSrcHash();
+    if (cache.srcHash === currentHash) {
+      return { valid: true, routes: cache.routes };
+    }
+
+    return { valid: false, routes: [] };
   }
 
   /**
@@ -83,30 +94,70 @@ export class RouteScanner {
     this.visitedFiles.clear();
     const results: ScannedRoute[] = [];
 
-    // Estratégia 1: file-based routing
     results.push(...this.scanFileBasedRoutes());
-
-    // Estratégia 2: configuração de router + seguir imports
     results.push(...this.scanRouterConfigs());
-
-    // Estratégia 3: busca ampla por padrões
     results.push(...this.scanCodePatterns());
 
-    // Deduplicar mantendo a maior confiança
-    return this.dedup(results);
+    const deduped = this.dedup(results);
+
+    // Salvar cache
+    const paths = deduped.map((r) => r.path);
+    if (!paths.includes('/')) {
+      paths.unshift('/');
+    }
+
+    const cache: ScanCache = {
+      timestamp: Date.now(),
+      srcHash: this.computeSrcHash(),
+      routes: paths,
+    };
+    this.configManager.writeCache(cache);
+
+    return deduped;
   }
 
-  /**
-   * Retorna apenas os paths únicos (sem metadados).
-   */
   scanPaths(): string[] {
     const results = this.scan();
     const paths = results.map((r) => r.path);
-    // Garantir "/" presente
     if (!paths.includes('/')) {
       paths.unshift('/');
     }
     return paths;
+  }
+
+  // ── Cache hash ────────────────────────────────────────────────
+
+  private computeSrcHash(): string {
+    const srcDir = path.join(this.rootPath, 'src');
+    if (!fs.existsSync(srcDir)) {
+      return 'no-src';
+    }
+
+    const hash = crypto.createHash('md5');
+    this.hashDir(srcDir, hash);
+    return hash.digest('hex').slice(0, 16);
+  }
+
+  private hashDir(dir: string, hash: crypto.Hash): void {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true }).sort(
+        (a, b) => a.name.localeCompare(b.name)
+      );
+
+      for (const entry of entries) {
+        if (entry.isDirectory() && !RouteScanner.IGNORE_DIRS.has(entry.name)) {
+          this.hashDir(path.join(dir, entry.name), hash);
+        } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (RouteScanner.SCAN_EXTENSIONS.includes(ext)) {
+            const stat = fs.statSync(path.join(dir, entry.name));
+            hash.update(entry.name + ':' + stat.mtimeMs);
+          }
+        }
+      }
+    } catch {
+      // Diretório inacessível
+    }
   }
 
   // ── Estratégia 1: File-based routing ──────────────────────────
@@ -137,12 +188,6 @@ export class RouteScanner {
     return results;
   }
 
-  /**
-   * Converte um caminho de arquivo em rota.
-   * Ex: src/pages/About.tsx → /about
-   *     src/pages/blog/Post.tsx → /blog/post
-   *     src/routes/about/+page.svelte → /about
-   */
   private fileToRoute(
     filePath: string,
     baseDir: string,
@@ -154,12 +199,10 @@ export class RouteScanner {
     const ext = path.extname(fileName);
     const baseName = fileName.replace(ext, '');
 
-    // Ignorar arquivos utilitários
-    if (/^(_|\.|\[)/.test(baseName)) {
+    if (/^(_|\.|\[|\()/.test(baseName)) {
       return null;
     }
 
-    // SvelteKit: +page.svelte, +page.ts
     if (transform === 'svelte') {
       if (!baseName.startsWith('+page')) {
         return null;
@@ -168,15 +211,13 @@ export class RouteScanner {
       if (dirParts.length === 0) {
         return '/';
       }
-      // Ignorar diretórios com parâmetros
       if (dirParts.some((p) => p.startsWith('[') || p.startsWith('('))) {
         return null;
       }
       return '/' + dirParts.join('/').toLowerCase();
     }
 
-    // Padrão (filename): About.tsx → /about
-    const routeParts = parts.slice(0, -1); // diretórios intermediários
+    const routeParts = parts.slice(0, -1);
     const isIndex = /^index$/i.test(baseName);
 
     if (!isIndex) {
@@ -187,7 +228,6 @@ export class RouteScanner {
       return '/';
     }
 
-    // Ignorar partes dinâmicas
     if (routeParts.some((p) => /[:*\[\]]/.test(p))) {
       return null;
     }
@@ -206,10 +246,8 @@ export class RouteScanner {
         continue;
       }
 
-      // Extrair rotas do arquivo principal
       results.push(...this.extractFromRouterFile(fullPath));
 
-      // Seguir imports
       const imports = this.findLocalImports(fullPath);
       for (const importPath of imports) {
         if (!this.visitedFiles.has(importPath)) {
@@ -249,18 +287,12 @@ export class RouteScanner {
     return results;
   }
 
-  /**
-   * Encontra imports locais (relativos) em um arquivo.
-   * Segue: import X from './routes/auth'
-   */
   private findLocalImports(filePath: string): string[] {
     const results: string[] = [];
 
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
       const dir = path.dirname(filePath);
-
-      // import X from './path' ou import('./path')
       const importRegex = /(?:from|import\()\s*["'`](\.\/[^"'`]+)["'`]/g;
       let match: RegExpExecArray | null;
 
@@ -277,13 +309,9 @@ export class RouteScanner {
     return results;
   }
 
-  /**
-   * Resolve um import relativo para um caminho absoluto de arquivo.
-   */
   private resolveImport(fromDir: string, importPath: string): string | null {
     const base = path.join(fromDir, importPath);
 
-    // Tentar com extensões
     for (const ext of RouteScanner.SCAN_EXTENSIONS) {
       const withExt = base + ext;
       if (fs.existsSync(withExt)) {
@@ -291,7 +319,6 @@ export class RouteScanner {
       }
     }
 
-    // Tentar como diretório com index
     for (const ext of RouteScanner.SCAN_EXTENSIONS) {
       const indexFile = path.join(base, 'index' + ext);
       if (fs.existsSync(indexFile)) {
@@ -302,7 +329,7 @@ export class RouteScanner {
     return null;
   }
 
-  // ── Estratégia 3: Busca ampla por padrões ─────────────────────
+  // ── Estratégia 3: Busca ampla ─────────────────────────────────
 
   private scanCodePatterns(): ScannedRoute[] {
     const results: ScannedRoute[] = [];
@@ -361,9 +388,6 @@ export class RouteScanner {
     return true;
   }
 
-  /**
-   * Deduplicar rotas mantendo a de maior confiança.
-   */
   private dedup(routes: ScannedRoute[]): ScannedRoute[] {
     const map = new Map<string, ScannedRoute>();
     const priority: Record<string, number> = { alta: 3, media: 2, baixa: 1 };

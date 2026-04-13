@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn, ChildProcess } from 'child_process';
-import { Route, PrerenderConfig } from './configManager';
+import { spawn, ChildProcess, execSync } from 'child_process';
+import { Route, PrerenderConfig, RouteResult, BuildResults, ConfigManager } from './configManager';
 
 export interface BuildProgress {
   step: 'install' | 'build' | 'render' | 'done' | 'error';
@@ -11,20 +11,27 @@ export interface BuildProgress {
   message?: string;
   total?: number;
   current?: number;
+  /** Dados de resultado por rota (SEO + tamanhos) */
+  result?: RouteResult;
 }
 
 export type ProgressCallback = (progress: BuildProgress) => void;
 
 /**
  * Executa o build do Vite seguido do pré-render real com Puppeteer.
- * Usa child_process para capturar progresso e reportar à sidebar.
+ * Captura progresso via child_process e reporta à sidebar.
+ * Inclui validação SEO e comparação de tamanho.
  */
 export class Runner {
   private outputChannel: vscode.OutputChannel;
   private process: ChildProcess | undefined;
   private onProgress: ProgressCallback | undefined;
+  private routeResults: RouteResult[] = [];
 
-  constructor(private projectRoot: string) {
+  constructor(
+    private projectRoot: string,
+    private configManager: ConfigManager
+  ) {
     this.outputChannel = vscode.window.createOutputChannel('Vite Pre-render');
   }
 
@@ -32,9 +39,6 @@ export class Runner {
     this.onProgress = cb;
   }
 
-  /**
-   * Executa o fluxo completo via script único.
-   */
   run(enabledRoutes: Route[], config: PrerenderConfig): void {
     if (enabledRoutes.length === 0) {
       vscode.window.showWarningMessage(
@@ -48,16 +52,18 @@ export class Runner {
       return;
     }
 
+    this.routeResults = [];
     this.generateScript(enabledRoutes, config);
 
     this.outputChannel.clear();
     this.outputChannel.show(true);
-    this.outputChannel.appendLine('═══ Vite Pre-render Assistant ═══');
+    this.outputChannel.appendLine('══════════════════════════════════════');
+    this.outputChannel.appendLine('  Vite Pre-render Assistant');
+    this.outputChannel.appendLine('══════════════════════════════════════');
     this.outputChannel.appendLine('');
 
     this.emit({ step: 'install', status: 'start' });
 
-    // Comando único — sem problemas com && no PowerShell
     const proc = spawn('node', ['prerender.script.mjs'], {
       cwd: this.projectRoot,
       shell: true,
@@ -65,38 +71,31 @@ export class Runner {
     });
 
     this.process = proc;
-
     let buffer = '';
 
     proc.stdout?.on('data', (data: Buffer) => {
-      const text = data.toString('utf-8');
-      buffer += text;
-
-      // Processar linhas completas
+      buffer += data.toString('utf-8');
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
-
       for (const line of lines) {
         this.processLine(line);
       }
     });
 
     proc.stderr?.on('data', (data: Buffer) => {
-      const text = data.toString('utf-8');
-      this.outputChannel.appendLine(text);
+      this.outputChannel.appendLine(data.toString('utf-8'));
     });
 
     proc.on('close', (code) => {
-      // Processar buffer restante
       if (buffer.trim()) {
         this.processLine(buffer);
       }
-
       this.process = undefined;
 
       if (code === 0) {
         this.outputChannel.appendLine('');
         this.outputChannel.appendLine('Pré-render concluído com sucesso.');
+        this.saveBuildResults(config.outputDir);
         this.emit({ step: 'done', status: 'done' });
       } else {
         this.outputChannel.appendLine('');
@@ -110,12 +109,8 @@ export class Runner {
     });
 
     proc.on('error', (err) => {
-      this.outputChannel.appendLine(`Erro ao iniciar processo: ${err.message}`);
-      this.emit({
-        step: 'error',
-        status: 'error',
-        message: err.message,
-      });
+      this.outputChannel.appendLine(`Erro ao iniciar: ${err.message}`);
+      this.emit({ step: 'error', status: 'error', message: err.message });
       this.process = undefined;
     });
   }
@@ -139,10 +134,81 @@ export class Runner {
     }
   }
 
+  /**
+   * Retorna o HTML renderizado de uma rota para preview.
+   */
+  getRenderedHtml(routePath: string, outputDir: string): string | null {
+    const htmlPath = routePath === '/'
+      ? path.join(this.projectRoot, outputDir, 'index.html')
+      : path.join(this.projectRoot, outputDir, routePath.slice(1), 'index.html');
+
+    if (fs.existsSync(htmlPath)) {
+      return fs.readFileSync(htmlPath, 'utf-8');
+    }
+    return null;
+  }
+
+  /**
+   * Copia a pasta de output para o destino configurado.
+   */
+  deployTo(outputDir: string, destination: string): boolean {
+    const src = path.join(this.projectRoot, outputDir);
+    const dest = path.resolve(this.projectRoot, destination);
+
+    if (!fs.existsSync(src)) {
+      vscode.window.showErrorMessage(`Pasta ${outputDir} não encontrada. Execute o pré-render primeiro.`);
+      return false;
+    }
+
+    try {
+      this.copyDirSync(src, dest);
+      vscode.window.showInformationMessage(`Deploy copiado para: ${dest}`);
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Erro no deploy: ${msg}`);
+      return false;
+    }
+  }
+
+  /**
+   * Gera um arquivo .zip da pasta de output.
+   */
+  generateZip(outputDir: string): boolean {
+    const src = path.join(this.projectRoot, outputDir);
+    const zipPath = path.join(this.projectRoot, `${outputDir}.zip`);
+
+    if (!fs.existsSync(src)) {
+      vscode.window.showErrorMessage(`Pasta ${outputDir} não encontrada.`);
+      return false;
+    }
+
+    try {
+      // Usar tar no Windows (PowerShell) ou zip no Unix
+      if (process.platform === 'win32') {
+        execSync(
+          `powershell -Command "Compress-Archive -Path '${src}\\*' -DestinationPath '${zipPath}' -Force"`,
+          { cwd: this.projectRoot }
+        );
+      } else {
+        execSync(`cd "${src}" && zip -r "${zipPath}" .`, { cwd: this.projectRoot });
+      }
+
+      vscode.window.showInformationMessage(`ZIP gerado: ${zipPath}`);
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Erro ao gerar ZIP: ${msg}`);
+      return false;
+    }
+  }
+
   dispose(): void {
     this.cancel();
     this.outputChannel.dispose();
   }
+
+  // ── Internos ──────────────────────────────────────────────────
 
   private processLine(raw: string): void {
     const line = raw.trim();
@@ -150,15 +216,20 @@ export class Runner {
       return;
     }
 
-    // Tentar parsear como JSON de progresso
     if (line.startsWith('{"')) {
       try {
         const progress = JSON.parse(line) as BuildProgress;
+
+        // Coletar resultados por rota
+        if (progress.result) {
+          this.routeResults.push(progress.result);
+        }
+
         this.emit(progress);
         this.logProgress(progress);
         return;
       } catch {
-        // Não é JSON válido, tratar como texto
+        // Não é JSON
       }
     }
 
@@ -174,7 +245,6 @@ export class Runner {
           this.outputChannel.appendLine('Dependências OK.');
         }
         break;
-
       case 'build':
         if (p.status === 'start') {
           this.outputChannel.appendLine('');
@@ -183,15 +253,20 @@ export class Runner {
           this.outputChannel.appendLine('Build concluído.');
         }
         break;
-
       case 'render':
         if (p.status === 'start' && p.route) {
-          this.outputChannel.appendLine(
-            `  [${p.current}/${p.total}] Renderizando ${p.route}...`
-          );
-        } else if (p.status === 'done' && p.route) {
-          this.outputChannel.appendLine(`         OK`);
-        } else if (p.status === 'error' && p.route) {
+          this.outputChannel.appendLine(`  [${p.current}/${p.total}] ${p.route}`);
+        } else if (p.status === 'done' && p.result) {
+          const r = p.result;
+          const sizeInfo = `${formatSize(r.originalSize)} → ${formatSize(r.renderedSize)}`;
+          const seoInfo = `SEO: ${r.seo.score}/100`;
+          this.outputChannel.appendLine(`         OK  ${sizeInfo}  ${seoInfo}`);
+          if (r.seo.warnings.length > 0) {
+            for (const w of r.seo.warnings) {
+              this.outputChannel.appendLine(`         ⚠ ${w}`);
+            }
+          }
+        } else if (p.status === 'error') {
           this.outputChannel.appendLine(`         ERRO: ${p.message}`);
         }
         break;
@@ -202,15 +277,52 @@ export class Runner {
     this.onProgress?.(progress);
   }
 
+  private saveBuildResults(outputDir: string): void {
+    if (this.routeResults.length === 0) {
+      return;
+    }
+
+    const results: BuildResults = {
+      timestamp: Date.now(),
+      outputDir,
+      routes: this.routeResults,
+      totalOriginalSize: this.routeResults.reduce((s, r) => s + r.originalSize, 0),
+      totalRenderedSize: this.routeResults.reduce((s, r) => s + r.renderedSize, 0),
+    };
+
+    this.configManager.writeBuildResults(results);
+  }
+
+  private copyDirSync(src: string, dest: string): void {
+    if (!fs.existsSync(dest)) {
+      fs.mkdirSync(dest, { recursive: true });
+    }
+
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = path.join(src, entry.name);
+      const destPath = path.join(dest, entry.name);
+
+      if (entry.isDirectory()) {
+        this.copyDirSync(srcPath, destPath);
+      } else {
+        fs.copyFileSync(srcPath, destPath);
+      }
+    }
+  }
+
   /**
-   * Gera script completo que faz tudo: instala puppeteer, builda, renderiza.
-   * Um único arquivo .mjs executado com `node`.
+   * Gera o script completo .mjs com pré-render real + validação SEO.
    */
   private generateScript(routes: Route[], config: PrerenderConfig): void {
-    const routeList = JSON.stringify(routes.map((r) => r.path));
+    const routeConfigs = JSON.stringify(
+      routes.map((r) => ({
+        path: r.path,
+        waitForSelector: r.waitForSelector || config.waitForSelector,
+        waitTime: r.waitTime || config.waitTime,
+      }))
+    );
     const outputDir = config.outputDir || 'prerender-build';
-    const waitSelector = config.waitForSelector || '#app, #root, [data-app]';
-    const waitTime = config.waitTime || 2000;
     const minify = config.minify || false;
     const cleanBefore = config.cleanBefore !== false;
 
@@ -222,31 +334,72 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const routes = ${routeList};
+const ROUTES = ${routeConfigs};
 const OUTPUT_DIR = path.resolve(__dirname, '${outputDir}');
-const WAIT_SELECTOR = '${waitSelector}';
-const WAIT_TIME = ${waitTime};
 const MINIFY = ${minify};
-const CLEAN_BEFORE = ${cleanBefore};
+const CLEAN = ${cleanBefore};
 
 function progress(obj) {
   console.log(JSON.stringify(obj));
 }
 
+function analyzeSeo(html, route) {
+  const warnings = [];
+  let score = 100;
+
+  const titleMatch = html.match(/<title[^>]*>([^<]*)<\\/title>/i);
+  const hasTitle = !!titleMatch && titleMatch[1].trim().length > 0;
+  const title = titleMatch ? titleMatch[1].trim() : '';
+  if (!hasTitle) { warnings.push('Sem <title>'); score -= 20; }
+  else if (title.length < 10) { warnings.push('Title muito curto (' + title.length + ' chars)'); score -= 5; }
+  else if (title.length > 70) { warnings.push('Title muito longo (' + title.length + ' chars)'); score -= 5; }
+
+  const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["']/i)
+    || html.match(/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']description["']/i);
+  const hasMetaDescription = !!descMatch && descMatch[1].trim().length > 0;
+  const metaDescription = descMatch ? descMatch[1].trim() : '';
+  if (!hasMetaDescription) { warnings.push('Sem meta description'); score -= 15; }
+  else if (metaDescription.length < 50) { warnings.push('Meta description curta'); score -= 5; }
+  else if (metaDescription.length > 160) { warnings.push('Meta description longa'); score -= 5; }
+
+  const hasOgTitle = /<meta[^>]*property=["']og:title["']/i.test(html);
+  if (!hasOgTitle) { warnings.push('Sem og:title'); score -= 10; }
+
+  const hasOgDescription = /<meta[^>]*property=["']og:description["']/i.test(html);
+  if (!hasOgDescription) { warnings.push('Sem og:description'); score -= 10; }
+
+  const hasOgImage = /<meta[^>]*property=["']og:image["']/i.test(html);
+  if (!hasOgImage) { warnings.push('Sem og:image'); score -= 10; }
+
+  const hasCanonical = /<link[^>]*rel=["']canonical["']/i.test(html);
+  if (!hasCanonical) { warnings.push('Sem link canonical'); score -= 5; }
+
+  const hasLang = /<html[^>]*lang=["'][^"']+["']/i.test(html);
+  if (!hasLang) { warnings.push('Sem atributo lang no <html>'); score -= 5; }
+
+  const hasViewport = /<meta[^>]*name=["']viewport["']/i.test(html);
+  if (!hasViewport) { warnings.push('Sem meta viewport'); score -= 5; }
+
+  return {
+    hasTitle, title,
+    hasMetaDescription, metaDescription,
+    hasOgTitle, hasOgDescription, hasOgImage,
+    hasCanonical, hasLang, hasViewport,
+    warnings, score: Math.max(0, score),
+  };
+}
+
 async function main() {
-  // ── 1. Verificar/instalar puppeteer ──
+  // 1. Dependências
   progress({ step: 'install', status: 'start' });
 
   let puppeteer;
   try {
     puppeteer = await import('puppeteer');
   } catch {
-    console.log('Puppeteer não encontrado. Instalando...');
+    console.log('Instalando puppeteer...');
     try {
-      execSync('npm install --save-dev puppeteer', {
-        cwd: __dirname,
-        stdio: 'pipe',
-      });
+      execSync('npm install --save-dev puppeteer', { cwd: __dirname, stdio: 'pipe' });
       puppeteer = await import('puppeteer');
     } catch (err) {
       progress({ step: 'error', status: 'error', message: 'Falha ao instalar puppeteer: ' + err.message });
@@ -256,67 +409,63 @@ async function main() {
 
   progress({ step: 'install', status: 'done' });
 
-  // ── 2. Build do Vite ──
+  // 2. Build
   progress({ step: 'build', status: 'start' });
 
-  if (CLEAN_BEFORE && fs.existsSync(OUTPUT_DIR)) {
+  if (CLEAN && fs.existsSync(OUTPUT_DIR)) {
     fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
   }
 
   try {
     execSync('npx vite build --outDir ' + path.relative(__dirname, OUTPUT_DIR), {
-      cwd: __dirname,
-      stdio: 'pipe',
+      cwd: __dirname, stdio: 'pipe',
     });
   } catch (err) {
-    progress({ step: 'error', status: 'error', message: 'Falha no build: ' + err.message });
+    progress({ step: 'error', status: 'error', message: 'Build falhou: ' + err.stderr?.toString() || err.message });
     process.exit(1);
   }
 
   progress({ step: 'build', status: 'done' });
 
-  // ── 3. Verificar output ──
+  // 3. Verificar
   const indexPath = path.join(OUTPUT_DIR, 'index.html');
   if (!fs.existsSync(indexPath)) {
     progress({ step: 'error', status: 'error', message: OUTPUT_DIR + '/index.html nao encontrado.' });
     process.exit(1);
   }
 
-  // ── 4. Subir servidor estático ──
+  const originalHtml = fs.readFileSync(indexPath, 'utf-8');
+  const originalSize = Buffer.byteLength(originalHtml, 'utf-8');
+
+  // 4. Servidor
   const port = await findFreePort();
   const server = createStaticServer(OUTPUT_DIR);
   await new Promise((resolve) => server.listen(port, resolve));
-  const baseUrl = 'http://localhost:' + port;
 
-  // ── 5. Renderizar com Puppeteer ──
+  // 5. Render
   const browser = await puppeteer.default.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
-  const total = routes.length;
-  let success = 0;
-  let errors = 0;
+  const total = ROUTES.length;
 
-  for (let i = 0; i < routes.length; i++) {
-    const route = routes[i];
-    progress({ step: 'render', status: 'start', route, current: i + 1, total });
+  for (let i = 0; i < ROUTES.length; i++) {
+    const route = ROUTES[i];
+    progress({ step: 'render', status: 'start', route: route.path, current: i + 1, total });
 
     try {
       const page = await browser.newPage();
-      const url = baseUrl + route;
+      await page.goto('http://localhost:' + port + route.path, {
+        waitUntil: 'networkidle0',
+        timeout: 30000,
+      });
 
-      await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-
-      // Esperar pelo seletor do app ou timeout
       try {
-        await page.waitForSelector(WAIT_SELECTOR, { timeout: WAIT_TIME });
-      } catch {
-        // Seletor não encontrado, mas seguimos com o que temos
-      }
+        await page.waitForSelector(route.waitForSelector, { timeout: route.waitTime });
+      } catch { /* seletor não encontrado, usar o que tem */ }
 
-      // Aguardar tempo extra para renderização dinâmica
-      await new Promise((r) => setTimeout(r, Math.min(WAIT_TIME, 3000)));
+      await new Promise((r) => setTimeout(r, Math.min(route.waitTime, 3000)));
 
       let html = await page.content();
 
@@ -324,10 +473,12 @@ async function main() {
         html = html.replace(/\\n\\s*/g, '').replace(/\\s{2,}/g, ' ');
       }
 
-      // Salvar HTML
-      const outputPath = route === '/'
+      const renderedSize = Buffer.byteLength(html, 'utf-8');
+      const seo = analyzeSeo(html, route.path);
+
+      const outputPath = route.path === '/'
         ? path.join(OUTPUT_DIR, 'index.html')
-        : path.join(OUTPUT_DIR, route.slice(1), 'index.html');
+        : path.join(OUTPUT_DIR, route.path.slice(1), 'index.html');
 
       const outputDirPath = path.dirname(outputPath);
       if (!fs.existsSync(outputDirPath)) {
@@ -336,33 +487,34 @@ async function main() {
 
       fs.writeFileSync(outputPath, html, 'utf-8');
       await page.close();
-      success++;
 
-      progress({ step: 'render', status: 'done', route, current: i + 1, total });
+      const result = {
+        path: route.path,
+        status: 'done',
+        originalSize,
+        renderedSize,
+        seo,
+      };
+
+      progress({ step: 'render', status: 'done', route: route.path, current: i + 1, total, result });
     } catch (err) {
-      errors++;
-      progress({
-        step: 'render',
+      const result = {
+        path: route.path,
         status: 'error',
-        route,
-        current: i + 1,
-        total,
-        message: err.message,
-      });
+        originalSize,
+        renderedSize: 0,
+        seo: { hasTitle: false, title: '', hasMetaDescription: false, metaDescription: '', hasOgTitle: false, hasOgDescription: false, hasOgImage: false, hasCanonical: false, hasLang: false, hasViewport: false, warnings: [], score: 0 },
+        error: err.message,
+      };
+
+      progress({ step: 'render', status: 'error', route: route.path, current: i + 1, total, message: err.message, result });
     }
   }
 
-  // ── 6. Cleanup ──
   await browser.close();
   server.close();
 
-  progress({
-    step: 'done',
-    status: 'done',
-    total,
-    current: success,
-    message: errors > 0 ? errors + ' rota(s) com erro' : 'Todas as rotas renderizadas',
-  });
+  progress({ step: 'done', status: 'done' });
 }
 
 function createStaticServer(root) {
@@ -374,37 +526,26 @@ function createStaticServer(root) {
     }
 
     if (!fs.existsSync(filePath)) {
-      // SPA fallback: servir index.html para qualquer rota
       filePath = path.join(root, 'index.html');
     }
 
     const ext = path.extname(filePath).toLowerCase();
-    const mimeTypes = {
-      '.html': 'text/html',
-      '.js': 'application/javascript',
-      '.css': 'text/css',
-      '.json': 'application/json',
-      '.png': 'image/png',
-      '.jpg': 'image/jpeg',
-      '.svg': 'image/svg+xml',
-      '.woff': 'font/woff',
-      '.woff2': 'font/woff2',
+    const types = {
+      '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css',
+      '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+      '.svg': 'image/svg+xml', '.woff': 'font/woff', '.woff2': 'font/woff2',
+      '.ico': 'image/x-icon', '.webp': 'image/webp', '.gif': 'image/gif',
     };
 
-    const contentType = mimeTypes[ext] || 'application/octet-stream';
-    const content = fs.readFileSync(filePath);
-    res.writeHead(200, { 'Content-Type': contentType });
-    res.end(content);
+    res.writeHead(200, { 'Content-Type': types[ext] || 'application/octet-stream' });
+    res.end(fs.readFileSync(filePath));
   });
 }
 
 async function findFreePort() {
   return new Promise((resolve) => {
-    const srv = createServer();
-    srv.listen(0, () => {
-      const port = srv.address().port;
-      srv.close(() => resolve(port));
-    });
+    const s = createServer();
+    s.listen(0, () => { const p = s.address().port; s.close(() => resolve(p)); });
   });
 }
 
@@ -414,7 +555,12 @@ main().catch((err) => {
 });
 `.trimStart();
 
-    const scriptPath = path.join(this.projectRoot, 'prerender.script.mjs');
-    fs.writeFileSync(scriptPath, script, 'utf-8');
+    fs.writeFileSync(path.join(this.projectRoot, 'prerender.script.mjs'), script, 'utf-8');
   }
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) { return bytes + 'B'; }
+  if (bytes < 1024 * 1024) { return (bytes / 1024).toFixed(1) + 'KB'; }
+  return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
 }

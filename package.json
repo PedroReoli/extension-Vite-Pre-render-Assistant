@@ -41,6 +41,24 @@
       {
         "command": "vitePrerender.run",
         "title": "Vite Pre-render: Gerar + Executar"
+      },
+      {
+        "command": "vitePrerender.preview",
+        "title": "Vite Pre-render: Preview"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vitePrerender.run",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "vitePrerender.openPanel",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p",
+        "when": "workspaceFolderCount > 0"
       }
     ]
   },

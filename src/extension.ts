@@ -20,8 +20,8 @@ export function activate(context: vscode.ExtensionContext): void {
   if (isVite && rootPath) {
     configManager = new ConfigManager(rootPath);
     routeManager = new RouteManager(configManager);
-    routeScanner = new RouteScanner(rootPath);
-    runner = new Runner(rootPath);
+    routeScanner = new RouteScanner(rootPath, configManager);
+    runner = new Runner(rootPath, configManager);
   }
 
   const sidebarProvider = new SidebarProvider(
@@ -40,12 +40,14 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
+  // Comando: focar sidebar
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.openPanel', () => {
       vscode.commands.executeCommand('vitePrerender.sidebarView.focus');
     })
   );
 
+  // Comando: executar diretamente (acessível via keybinding)
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.run', () => {
       if (!runner || !routeManager || !configManager) {
@@ -60,6 +62,16 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
+  // Comando: preview de rota
+  context.subscriptions.push(
+    vscode.commands.registerCommand('vitePrerender.preview', () => {
+      vscode.window.showInformationMessage(
+        'Use o botão "Preview" nos resultados do pré-render.'
+      );
+    })
+  );
+
+  // Observar mudanças no config
   if (rootPath) {
     const configWatcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(rootPath, 'prerender.config.json')

@@ -1,3 +1,6 @@
 node_modules/
 out/
 *.vsix
+.prerender-cache.json
+.prerender-results.json
+prerender.script.mjs
