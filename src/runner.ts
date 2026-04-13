@@ -3,8 +3,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Route } from './configManager';
 
+const OUTPUT_DIR = 'prerender-build';
+
 /**
  * Executa o build do Vite seguido do pré-render.
+ * Output gerado na pasta prerender-build/.
  * Usa terminal integrado do VSCode.
  */
 export class Runner {
@@ -31,14 +34,15 @@ export class Runner {
       commands.push('npm install');
     }
 
-    commands.push('npx vite build');
+    // Build do Vite com output na pasta prerender-build
+    commands.push(`npx vite build --outDir ${OUTPUT_DIR}`);
     commands.push('node ./prerender.script.mjs');
 
     const fullCommand = commands.join(' && ');
 
     this.getTerminal().sendText(fullCommand);
     vscode.window.showInformationMessage(
-      `Pré-render iniciado para ${enabledRoutes.length} rota(s).`
+      `Pré-render iniciado para ${enabledRoutes.length} rota(s). Output: ${OUTPUT_DIR}/`
     );
   }
 
@@ -54,12 +58,12 @@ import fs from 'fs';
 import path from 'path';
 
 const routes = [${routeList}];
-const distDir = path.resolve('dist');
+const outDir = path.resolve('${OUTPUT_DIR}');
 
 async function prerender() {
-  const templatePath = path.join(distDir, 'index.html');
+  const templatePath = path.join(outDir, 'index.html');
   if (!fs.existsSync(templatePath)) {
-    console.error('Erro: dist/index.html não encontrado. Execute o build primeiro.');
+    console.error('Erro: ${OUTPUT_DIR}/index.html nao encontrado. Verifique o build.');
     process.exit(1);
   }
 
@@ -70,20 +74,22 @@ async function prerender() {
     appType: 'custom',
   });
 
+  console.log('Gerando pre-render para ' + routes.length + ' rota(s)...');
+  console.log('Output: ${OUTPUT_DIR}/');
+  console.log('');
+
   for (const route of routes) {
     try {
-      const url = route === '/' ? '/index.html' : route + '.html';
       let html = template;
 
-      // Ajusta base href para a rota
       html = html.replace(
         '</head>',
         \`<link rel="canonical" href="\${route}" />\\n</head>\`
       );
 
       const outputPath = route === '/'
-        ? path.join(distDir, 'index.html')
-        : path.join(distDir, route.slice(1), 'index.html');
+        ? path.join(outDir, 'index.html')
+        : path.join(outDir, route.slice(1), 'index.html');
 
       const outputDir = path.dirname(outputPath);
       if (!fs.existsSync(outputDir)) {
@@ -91,14 +97,15 @@ async function prerender() {
       }
 
       fs.writeFileSync(outputPath, html, 'utf-8');
-      console.log(\`  Gerado: \${outputPath}\`);
+      console.log('  OK  ' + route + '  ->  ' + path.relative(process.cwd(), outputPath));
     } catch (err) {
-      console.error(\`  Erro na rota \${route}:\`, err);
+      console.error('  ERRO  ' + route + ':', err);
     }
   }
 
   await vite.close();
-  console.log('Pré-render concluído.');
+  console.log('');
+  console.log('Pre-render concluido com sucesso.');
 }
 
 prerender();

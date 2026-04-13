@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { detectViteProject } from './detector';
 import { ConfigManager } from './configManager';
 import { RouteManager } from './routeManager';
+import { RouteScanner } from './routeScanner';
 import { Runner } from './runner';
 import { SidebarProvider } from './webview/sidebarProvider';
 
@@ -9,34 +10,26 @@ let runner: Runner | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const detection = detectViteProject();
+  const isVite = detection.isVite && !!detection.rootPath;
+  const rootPath = detection.rootPath;
 
-  if (!detection.isVite || !detection.rootPath) {
-    context.subscriptions.push(
-      vscode.commands.registerCommand('vitePrerender.openPanel', () => {
-        vscode.window.showWarningMessage(
-          'Este projeto não foi detectado como um projeto Vite.'
-        );
-      }),
-      vscode.commands.registerCommand('vitePrerender.run', () => {
-        vscode.window.showWarningMessage(
-          'Este projeto não foi detectado como um projeto Vite.'
-        );
-      })
-    );
-    return;
+  let routeManager: RouteManager | undefined;
+  let routeScanner: RouteScanner | undefined;
+
+  if (isVite && rootPath) {
+    const configManager = new ConfigManager(rootPath);
+    routeManager = new RouteManager(configManager);
+    routeScanner = new RouteScanner(rootPath);
+    runner = new Runner(rootPath);
   }
 
-  const rootPath = detection.rootPath;
-  const configManager = new ConfigManager(rootPath);
-  const routeManager = new RouteManager(configManager);
-  runner = new Runner(rootPath);
-
-  // Registrar sidebar na barra lateral
+  // Sidebar sempre registrada
   const sidebarProvider = new SidebarProvider(
     context.extensionUri,
     routeManager,
     runner,
-    true
+    routeScanner,
+    isVite
   );
 
   context.subscriptions.push(
@@ -46,31 +39,36 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  // Comando: abrir painel (foca a sidebar)
+  // Comando: focar sidebar
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.openPanel', () => {
       vscode.commands.executeCommand('vitePrerender.sidebarView.focus');
     })
   );
 
-  // Comando: executar diretamente
+  // Comando: executar
   context.subscriptions.push(
     vscode.commands.registerCommand('vitePrerender.run', () => {
+      if (!runner || !routeManager) {
+        vscode.window.showWarningMessage(
+          'Este projeto não foi detectado como um projeto Vite.'
+        );
+        return;
+      }
       const enabled = routeManager.listEnabledRoutes();
-      runner!.run(enabled);
+      runner.run(enabled);
     })
   );
 
-  // Observar mudanças no prerender.config.json para atualizar a sidebar
-  const configWatcher = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(rootPath, 'prerender.config.json')
-  );
+  // Observar mudanças no config
+  if (rootPath) {
+    const configWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(rootPath, 'prerender.config.json')
+    );
+    configWatcher.onDidChange(() => sidebarProvider.update());
+    context.subscriptions.push(configWatcher);
+  }
 
-  configWatcher.onDidChange(() => {
-    sidebarProvider.update();
-  });
-
-  context.subscriptions.push(configWatcher);
   context.subscriptions.push({ dispose: () => runner?.dispose() });
 }
 
