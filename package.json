@@ -1,0 +1,39 @@
+{
+  "name": "vite-prerender-assistant",
+  "displayName": "Vite Pre-render Assistant",
+  "description": "Automatiza a configuração e execução de pré-render em projetos Vite",
+  "version": "0.1.0",
+  "publisher": "reoli",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceFolderContains:package.json"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vitePrerender.openPanel",
+        "title": "Vite Pre-render: Abrir Painel"
+      },
+      {
+        "command": "vitePrerender.run",
+        "title": "Vite Pre-render: Gerar + Executar"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

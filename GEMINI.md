@@ -1,0 +1,1 @@
+leia o AGENTS.md
