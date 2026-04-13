@@ -124,6 +124,16 @@ export const es = {
   'seo.selectTags': 'Selecciona meta tags para copiar ({route})',
   'seo.copiedToClipboard': '{count} meta tag(s) copiada(s) al portapapeles.',
 
+  // SEO Fix view
+  'seoFix.title': 'Corregir SEO',
+  'seoFix.add': 'agregar',
+  'seoFix.replace': 'reemplazar',
+  'seoFix.apply': 'Aplicar',
+  'seoFix.applyAll': 'Aplicar Todas',
+  'seoFix.progress': '{applied} de {total} aplicada(s)',
+  'seoFix.allApplied': 'Todas las correcciones aplicadas!',
+  'seoFix.rebuild': 'Reconstruir Pre-render',
+
   // Premium / Licensing
   'premium.badge': 'PRO',
   'premium.upgrade': 'Upgrade',

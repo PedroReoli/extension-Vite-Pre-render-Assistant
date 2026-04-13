@@ -4,8 +4,9 @@ import { RouteScanner } from '../routeScanner';
 import { Runner, BuildProgress } from '../runner';
 import { ConfigManager, BuildResults } from '../configManager';
 import { PreviewPanel } from './previewPanel';
-import { generateMetaTags, MetaTagSuggestion } from '../seo/metaTagGenerator';
-import { getHtml, ViewState, BuildState } from './getHtml';
+import { generateMetaTags } from '../seo/metaTagGenerator';
+import { applyMetaTag } from '../seo/metaTagInjector';
+import { getHtml, ViewState, BuildState, SeoFixState, SeoFixItem } from './getHtml';
 import { t } from '../i18n';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -13,6 +14,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private view?: vscode.WebviewView;
   private viewState: ViewState = 'idle';
+  private seoFixState?: SeoFixState;
   private buildState?: BuildState;
   private lastResults?: BuildResults | null;
 
@@ -57,11 +59,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     this.view.webview.html = getHtml(
       this.view.webview, routes, this.isVite, this.viewState,
-      this.buildState, outputDir, isOutdated, this.lastResults
+      this.buildState, outputDir, isOutdated, this.lastResults,
+      this.seoFixState
     );
   }
 
-  private handleMessage(msg: { type: string; path?: string; dir?: string }): void {
+  private handleMessage(msg: { type: string; path?: string; dir?: string; index?: number }): void {
     switch (msg.type) {
       case 'scan': this.handleScan(); break;
       case 'addRoute': if (msg.path && this.routeManager) { this.routeManager.addRoute(msg.path); this.render(); } break;
@@ -77,6 +80,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'deployZip': this.handleDeployZip(); break;
       case 'deployCopy': this.handleDeployCopy(); break;
       case 'fixSeo': this.handleFixSeo(msg.path); break;
+      case 'applyFix': this.handleApplyFix(msg.index); break;
+      case 'applyAllFixes': this.handleApplyAllFixes(); break;
+      case 'rebuild': this.handleRebuild(); break;
       case 'aiSuggest': this.handleAiSuggest(msg.path); break;
       case 'exportReport': this.handleExportReport(); break;
     }
@@ -193,7 +199,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private handleFixSeo(routePath?: string): void {
     if (!routePath || !this.configManager || !this.runner) { return; }
 
-    // Buscar resultado SEO da rota
     const results = this.configManager.readBuildResults();
     if (!results) {
       vscode.window.showWarningMessage(t('error.noResults'));
@@ -203,7 +208,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const routeResult = results.routes.find((r) => r.path === routePath);
     if (!routeResult) { return; }
 
-    // Buscar HTML renderizado
     const config = this.configManager.read();
     const outputDir = config?.outputDir || 'prerender-build';
     const html = this.runner.getRenderedHtml(routePath, outputDir);
@@ -212,35 +216,71 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    // Gerar sugestões
     const suggestions = generateMetaTags(html, routePath, routeResult.seo);
     if (suggestions.length === 0) {
       vscode.window.showInformationMessage(t('seo.allGood'));
       return;
     }
 
-    // Mostrar sugestões como quick pick
-    const items = suggestions.map((s) => ({
-      label: `${s.action === 'add' ? '+' : '~'} ${s.type}`,
-      description: s.value,
-      detail: s.tag,
-      suggestion: s,
-    }));
+    this.seoFixState = {
+      routePath,
+      suggestions: suggestions.map((s) => ({ suggestion: s, status: 'pending' })),
+      allDone: false,
+    };
+    this.viewState = 'seoFix';
+    this.render();
+  }
 
-    vscode.window.showQuickPick(items, {
-      canPickMany: true,
-      placeHolder: t('seo.selectTags', { route: routePath }),
-    }).then((selected) => {
-      if (!selected || selected.length === 0) { return; }
+  private handleApplyFix(index?: number): void {
+    if (index === undefined || !this.seoFixState || !this.configManager) { return; }
 
-      // Copiar as tags para o clipboard
-      const tags = selected.map((s) => s.detail).join('\n');
-      vscode.env.clipboard.writeText(tags).then(() => {
-        vscode.window.showInformationMessage(
-          t('seo.copiedToClipboard', { count: selected.length })
-        );
-      });
-    });
+    const item = this.seoFixState.suggestions[index];
+    if (!item || item.status !== 'pending') { return; }
+
+    const projectRoot = this.configManager.getProjectRoot();
+    const result = applyMetaTag(projectRoot, item.suggestion);
+
+    if (result.success) {
+      item.status = 'applied';
+    } else {
+      item.status = 'error';
+      item.error = result.error;
+    }
+
+    this.checkAllDone();
+    this.render();
+  }
+
+  private handleApplyAllFixes(): void {
+    if (!this.seoFixState || !this.configManager) { return; }
+
+    const projectRoot = this.configManager.getProjectRoot();
+
+    for (const item of this.seoFixState.suggestions) {
+      if (item.status !== 'pending') { continue; }
+
+      const result = applyMetaTag(projectRoot, item.suggestion);
+      if (result.success) {
+        item.status = 'applied';
+      } else {
+        item.status = 'error';
+        item.error = result.error;
+      }
+    }
+
+    this.checkAllDone();
+    this.render();
+  }
+
+  private handleRebuild(): void {
+    this.seoFixState = undefined;
+    this.handleRun();
+  }
+
+  private checkAllDone(): void {
+    if (!this.seoFixState) { return; }
+    const pending = this.seoFixState.suggestions.filter((s) => s.status === 'pending');
+    this.seoFixState.allDone = pending.length === 0;
   }
 
   private handleAiSuggest(routePath?: string): void {

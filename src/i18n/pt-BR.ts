@@ -124,6 +124,16 @@ export const ptBR = {
   'seo.selectTags': 'Selecione meta tags para copiar ({route})',
   'seo.copiedToClipboard': '{count} meta tag(s) copiada(s) para o clipboard.',
 
+  // SEO Fix view
+  'seoFix.title': 'Corrigir SEO',
+  'seoFix.add': 'adicionar',
+  'seoFix.replace': 'substituir',
+  'seoFix.apply': 'Aplicar',
+  'seoFix.applyAll': 'Aplicar Todas',
+  'seoFix.progress': '{applied} de {total} aplicada(s)',
+  'seoFix.allApplied': 'Todas as correções aplicadas!',
+  'seoFix.rebuild': 'Refazer Pre-render',
+
   // Premium / Licensing
   'premium.badge': 'PRO',
   'premium.upgrade': 'Upgrade',

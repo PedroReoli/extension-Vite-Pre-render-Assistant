@@ -124,6 +124,16 @@ export const en = {
   'seo.selectTags': 'Select meta tags to copy ({route})',
   'seo.copiedToClipboard': '{count} meta tag(s) copied to clipboard.',
 
+  // SEO Fix view
+  'seoFix.title': 'Fix SEO',
+  'seoFix.add': 'add',
+  'seoFix.replace': 'replace',
+  'seoFix.apply': 'Apply',
+  'seoFix.applyAll': 'Apply All Fixes',
+  'seoFix.progress': '{applied} of {total} applied',
+  'seoFix.allApplied': 'All fixes applied!',
+  'seoFix.rebuild': 'Rebuild Pre-render',
+
   // Premium / Licensing
   'premium.badge': 'PRO',
   'premium.upgrade': 'Upgrade',

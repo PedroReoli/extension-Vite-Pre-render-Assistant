@@ -1,9 +1,22 @@
 import * as vscode from 'vscode';
 import { Route, RouteResult, BuildResults } from '../configManager';
 import { BuildProgress } from '../runner';
+import { MetaTagSuggestion } from '../seo/metaTagGenerator';
 import { t, translateWarning } from '../i18n';
 
-export type ViewState = 'idle' | 'scanning' | 'building' | 'results';
+export type ViewState = 'idle' | 'scanning' | 'building' | 'results' | 'seoFix';
+
+export interface SeoFixState {
+  routePath: string;
+  suggestions: SeoFixItem[];
+  allDone: boolean;
+}
+
+export interface SeoFixItem {
+  suggestion: MetaTagSuggestion;
+  status: 'pending' | 'applied' | 'error';
+  error?: string;
+}
 
 export interface RouteStatus {
   path: string;
@@ -30,14 +43,15 @@ export function getHtml(
   buildState?: BuildState,
   outputDir?: string,
   isOutdated?: boolean,
-  lastResults?: BuildResults | null
+  lastResults?: BuildResults | null,
+  seoFixState?: SeoFixState
 ): string {
   const n = getNonce();
   const enabled = routes.filter((r) => r.enabled).length;
   const od = outputDir || 'prerender-build';
 
   return `<!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
@@ -60,6 +74,7 @@ export function getHtml(
   ${isVite && viewState === 'scanning' ? scanningView() : ''}
   ${isVite && viewState === 'building' && buildState ? buildView(buildState) : ''}
   ${isVite && viewState === 'results' && lastResults ? resultsView(lastResults, od) : ''}
+  ${isVite && viewState === 'seoFix' && seoFixState ? seoFixView(seoFixState) : ''}
   <script nonce="${n}">${JS}</script>
 </body>
 </html>`;
@@ -260,6 +275,69 @@ function resultsView(results: BuildResults, outputDir: string): string {
   </div>`;
 }
 
+function seoFixView(state: SeoFixState): string {
+  const applied = state.suggestions.filter((s) => s.status === 'applied').length;
+  const total = state.suggestions.length;
+  const pct = total > 0 ? Math.round((applied / total) * 100) : 0;
+
+  const items = state.suggestions.map((item, i) => {
+    const s = item.suggestion;
+    const icons: Record<string, string> = {
+      pending: '<span class="ic ic-p">○</span>',
+      applied: '<span class="ic ic-d">✓</span>',
+      error: '<span class="ic ic-e">✗</span>',
+    };
+
+    const actionLabel = s.action === 'add' ? t('seoFix.add') : t('seoFix.replace');
+    const errMsg = item.error ? `<div class="sf-err">${e(item.error)}</div>` : '';
+
+    return `
+    <div class="sf-item ${item.status}">
+      <div class="sf-row">
+        ${icons[item.status]}
+        <div class="sf-info">
+          <div class="sf-type">${e(s.type)} <span class="sf-action">${actionLabel}</span></div>
+          <div class="sf-tag">${e(s.tag)}</div>
+        </div>
+        ${item.status === 'pending'
+          ? `<button class="btn btn-pri btn-sm apply-fix-btn" data-index="${i}">${t('seoFix.apply')}</button>`
+          : ''}
+      </div>
+      ${errMsg}
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="section">
+    <div class="sf-header">
+      <button class="sf-back" id="seoFixBack">&larr;</button>
+      <div>
+        <div class="lbl">${t('seoFix.title')}</div>
+        <div class="sf-route">${e(state.routePath)}</div>
+      </div>
+    </div>
+
+    <div class="pbar"><div class="pfill" style="width:${pct}%"></div></div>
+    <div class="ctr">${t('seoFix.progress', { applied, total })}</div>
+
+    <div class="sf-list">${items}</div>
+
+    ${total > 0 && applied < total ? `
+      <button class="btn btn-pri" id="applyAllFixes" style="margin-top:8px">
+        ${t('seoFix.applyAll')}
+      </button>` : ''}
+
+    ${state.allDone ? `
+      <div class="sf-done">
+        <div class="sf-done-icon">✓</div>
+        <div>${t('seoFix.allApplied')}</div>
+      </div>
+      <button class="btn btn-pri" id="rebuildBtn" style="margin-top:8px">
+        ${t('seoFix.rebuild')}
+      </button>` : ''}
+  </div>`;
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 
 function tag(label: string, ok: boolean): string {
@@ -374,6 +452,23 @@ body{font-family:var(--vscode-font-family);font-size:12px;color:var(--vscode-for
 .rc-actions{display:flex;gap:4px;margin-top:6px;padding-top:6px;border-top:1px solid var(--vscode-widget-border,rgba(128,128,128,.1))}
 .rc-actions .btn{flex:1}
 .results-footer{display:flex;gap:6px;margin-top:10px}.results-footer .btn{flex:1}
+.sf-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.sf-back{background:none;border:none;color:var(--vscode-foreground);cursor:pointer;font-size:16px;padding:2px 6px;border-radius:3px}
+.sf-back:hover{background:var(--vscode-list-hoverBackground)}
+.sf-route{font-family:var(--vscode-editor-font-family);font-size:13px;font-weight:600;margin-top:2px}
+.sf-list{margin-top:6px}
+.sf-item{padding:8px;border:1px solid var(--vscode-widget-border,rgba(128,128,128,.1));border-radius:6px;margin-bottom:6px;background:rgba(128,128,128,.02)}
+.sf-item.applied{border-color:rgba(40,167,69,.3);background:rgba(40,167,69,.04)}
+.sf-item.error{border-color:rgba(220,53,69,.3);background:rgba(220,53,69,.04)}
+.sf-row{display:flex;align-items:flex-start;gap:8px}
+.sf-info{flex:1;min-width:0}
+.sf-type{font-size:12px;font-weight:600}
+.sf-action{font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:rgba(128,128,128,.1);color:var(--vscode-descriptionForeground)}
+.sf-tag{font-family:var(--vscode-editor-font-family);font-size:10px;color:var(--vscode-descriptionForeground);margin-top:3px;word-break:break-all;line-height:1.4}
+.sf-err{font-size:10px;color:var(--vscode-errorForeground);margin-top:4px}
+.sf-done{text-align:center;padding:12px;margin-top:8px;background:rgba(40,167,69,.06);border-radius:6px;border:1px solid rgba(40,167,69,.2)}
+.sf-done-icon{font-size:24px;color:#28a745;margin-bottom:4px}
+.sf-done div{font-size:12px;font-weight:600;color:#28a745}
 `;
 
 const JS = `
@@ -391,6 +486,10 @@ document.addEventListener('click', e => {
   if(id==='deployZip') vscode.postMessage({type:'deployZip'});
   if(id==='deployCopy') vscode.postMessage({type:'deployCopy'});
   if(id==='exportReport') vscode.postMessage({type:'exportReport'});
+  if(id==='seoFixBack') vscode.postMessage({type:'showResults'});
+  if(id==='applyAllFixes') vscode.postMessage({type:'applyAllFixes'});
+  if(id==='rebuildBtn') vscode.postMessage({type:'rebuild'});
+  if(t.classList.contains('apply-fix-btn')&&d.index!==undefined){vscode.postMessage({type:'applyFix',index:parseInt(d.index)});}
   if(id==='addBtn'){const i=$('routeInput');if(i&&i.value.trim()){vscode.postMessage({type:'addRoute',path:i.value.trim()});i.value='';}}
   if(t.classList.contains('rm')&&d.path){e.stopPropagation();vscode.postMessage({type:'removeRoute',path:d.path});}
   if(t.classList.contains('mv')&&d.path&&d.dir){e.stopPropagation();vscode.postMessage({type:'moveRoute',path:d.path,dir:d.dir});}
